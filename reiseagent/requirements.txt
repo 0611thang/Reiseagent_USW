@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+streamlit
+streamlit-folium
+folium
+httpx
+anthropic
+python-dotenv
+pydantic
