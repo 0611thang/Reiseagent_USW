@@ -272,17 +272,21 @@ def render_left_col(trip: dict):
     # Chat messages HTML
     msgs_html = ""
     for msg in st.session_state.chat_messages:
-        css = "chat-user" if msg["role"] == "user" else "chat-asst"
-        msgs_html += f'<div class="{css}">{_esc(msg["content"])}</div>'
+        if msg["role"] == "user":
+            msg_style = "background:#2563eb;color:#fff;border-radius:10px 10px 2px 10px;padding:7px 11px;margin:4px 0;font-size:13px;text-align:right;"
+        else:
+            msg_style = "background:#f3f4f6;color:#111;border-radius:10px 10px 10px 2px;padding:7px 11px;margin:4px 0;font-size:13px;"
+        msgs_html += f'<div style="{msg_style}">{_esc(msg["content"])}</div>'
 
-    hint = "" if msgs_html else '<div class="chat-hint">Stell eine Frage zu deiner Reise, z.B. nach Budget, Wetter oder Aktivitäten.</div>'
+    hint = "" if msgs_html else '<div style="font-size:12px;color:#9ca3af;margin-bottom:8px;">Stell eine Frage zu deiner Reise, z.B. nach Budget, Wetter oder Aktivitäten.</div>'
 
-    st.markdown(f"""
-    <div class="card">
-        <div class="card-title">Chat</div>
-        <div class="chat-msgs">{hint}{msgs_html}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    html = (
+        '<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);padding:16px;margin-bottom:12px;">'
+        '<div style="font-size:15px;font-weight:700;color:#111;margin-bottom:10px;">Chat</div>'
+        f'<div style="max-height:320px;overflow-y:auto;margin-bottom:10px;">{hint}{msgs_html}</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
     with st.form("chat_form", clear_on_submit=True):
         user_input = st.text_input("", placeholder="Nachricht eingeben...", label_visibility="collapsed")
@@ -302,20 +306,21 @@ def render_left_col(trip: dict):
             summary = _esc(ins.get("summary", ""))
             pill = _status_pill(ins.get("status", ""))
             rows_html += f"""
-            <div class="insight-row">
-                <div class="insight-num">{i}</div>
-                <div class="insight-body">
-                    <div class="insight-name">{label}</div>
-                    <div class="insight-sum">{summary}</div>
+            <div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;">
+                <div style="min-width:22px;height:22px;border-radius:50%;background:#2563eb;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">{i}</div>
+                <div style="flex:1;font-size:13px;">
+                    <div style="font-weight:600;color:#111;">{label}</div>
+                    <div style="font-size:11px;color:#6b7280;">{summary}</div>
                 </div>
                 {pill}
             </div>"""
-        st.markdown(f"""
-        <div class="card">
-            <div class="card-title">Agent Insights</div>
-            {rows_html}
-        </div>
-        """, unsafe_allow_html=True)
+        html = (
+            '<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);padding:16px;margin-bottom:12px;">'
+            '<div style="font-size:15px;font-weight:700;color:#111;margin-bottom:10px;">Agent Insights</div>'
+            f'{rows_html}'
+            '</div>'
+        )
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def render_middle_col(plan: dict):
@@ -335,9 +340,9 @@ def render_middle_col(plan: dict):
                 w_str += " ⚠️"
 
         content_html += f"""
-        <div class="day-header">
-            <div class="day-title">Tag {day['day_number']} – {_esc(day.get('title', ''))}</div>
-            <div class="day-weather">{w_str}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0;margin-bottom:10px;margin-top:6px;">
+            <div style="font-size:14px;font-weight:700;color:#111;">Tag {day['day_number']} – {_esc(day.get('title', ''))}</div>
+            <div style="font-size:12px;color:#6b7280;">{w_str}</div>
         </div>"""
 
         for slot in day.get("time_slots", []):
@@ -360,31 +365,36 @@ def render_middle_col(plan: dict):
             meta_parts.append(f"Score {score_str}")
 
             content_html += f"""
-            <div class="activity-card">
-                <div class="time-stripe">
-                    <div class="time-start">{_esc(slot.get('start_time', ''))}</div>
-                    <div class="time-end">{_esc(slot.get('end_time', ''))}</div>
+            <div style="border:1px solid #f0f0f0;border-radius:10px;padding:10px 12px;margin-bottom:8px;background:#fff;display:flex;gap:12px;">
+                <div style="min-width:48px;flex-shrink:0;">
+                    <div style="font-size:13px;font-weight:700;color:#111;">{_esc(slot.get('start_time', ''))}</div>
+                    <div style="font-size:11px;color:#9ca3af;margin-top:2px;">{_esc(slot.get('end_time', ''))}</div>
                 </div>
-                <div class="act-body">
-                    <div class="act-header">
-                        <div class="act-name">{_esc(act['name'])}</div>
+                <div style="flex:1;min-width:0;">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                        <div style="font-size:14px;font-weight:700;color:#111;">{_esc(act['name'])}</div>
                         {badge}
                     </div>
-                    <div class="act-desc">{desc}{(' · ' + area) if area else ''}</div>
-                    <div class="act-meta">{' · '.join(meta_parts)}</div>
+                    <div style="font-size:12px;color:#6b7280;margin-top:3px;">{desc}{(' · ' + area) if area else ''}</div>
+                    <div style="font-size:11px;color:#9ca3af;margin-top:6px;">{' · '.join(meta_parts)}</div>
                 </div>
             </div>"""
 
-    st.markdown(f"""
-    <div class="card" style="max-height:76vh;overflow-y:auto;">
-        <div class="card-title">
-            Tagesplan
-            <span class="pill pill-green">active</span>
-        </div>
-        <div style="font-size:13px;color:#6b7280;margin-bottom:10px;">{n_days} Tage für {dest}</div>
-        {content_html}
-    </div>
-    """, unsafe_allow_html=True)
+    header = (
+        '<div style="font-size:15px;font-weight:700;color:#111;margin-bottom:10px;'
+        'display:flex;align-items:center;justify-content:space-between;">'
+        'Tagesplan'
+        '<span style="background:#dcfce7;color:#166534;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:600;">active</span>'
+        '</div>'
+    )
+    subtitle = f'<div style="font-size:13px;color:#6b7280;margin-bottom:10px;">{n_days} Tage f&#252;r {dest}</div>'
+    html = (
+        '<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);'
+        'padding:16px;margin-bottom:12px;max-height:76vh;overflow-y:auto;">'
+        + header + subtitle + content_html +
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def render_right_col(plan: dict):
