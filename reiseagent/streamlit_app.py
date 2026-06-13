@@ -22,15 +22,184 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-.agent-card { background:#f0f2f6; border-radius:8px; padding:10px; margin:4px 0; }
-.proposal-banner { background:#fff3cd; border:1px solid #ffc107; border-radius:8px; padding:15px; margin:10px 0; }
-.budget-box { background:#e8f5e9; border-radius:8px; padding:10px; }
-.status-within { color: #2e7d32; font-weight:bold; }
-.status-near { color: #f57c00; font-weight:bold; }
-.status-over { color: #c62828; font-weight:bold; }
+* { font-family: system-ui, -apple-system, sans-serif; }
+.stApp { background: #f5f6fa; }
+div[data-testid="stVerticalBlock"] { gap: 0; }
+.stButton button { border-radius: 8px; font-weight: 500; }
+.card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    padding: 16px;
+    margin-bottom: 12px;
+}
+.card-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #111;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.pill-green  { background: #dcfce7; color: #166534; }
+.pill-blue   { background: #dbeafe; color: #1d4ed8; }
+.pill-orange { background: #ffedd5; color: #c2410c; }
+.pill-gray   { background: #f3f4f6; color: #4b5563; }
+.pill-purple { background: #ede9fe; color: #6d28d9; }
+.activity-card {
+    border: 1px solid #f0f0f0;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    display: flex;
+    gap: 12px;
+    background: #fff;
+}
+.time-stripe { min-width: 48px; }
+.time-start  { font-size: 13px; font-weight: 700; color: #111; }
+.time-end    { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+.act-body    { flex: 1; }
+.act-header  { display: flex; justify-content: space-between; align-items: flex-start; }
+.act-name    { font-size: 14px; font-weight: 700; color: #111; }
+.act-desc    { font-size: 12px; color: #6b7280; margin-top: 3px; }
+.act-meta    { font-size: 11px; color: #9ca3af; margin-top: 6px; }
+.day-header  {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f0;
+    margin-bottom: 10px;
+    margin-top: 6px;
+}
+.day-title   { font-size: 14px; font-weight: 700; color: #111; }
+.day-weather { font-size: 12px; color: #6b7280; }
+.budget-hero {
+    background: #2563eb;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    color: #fff;
+}
+.budget-label  { font-size: 11px; opacity: 0.8; margin-bottom: 2px; }
+.budget-amount { font-size: 28px; font-weight: 800; line-height: 1.1; }
+.budget-sub    { font-size: 12px; opacity: 0.7; margin-top: 4px; }
+.budget-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 5px 0;
+    border-bottom: 1px solid #f3f4f6;
+}
+.cat-bar-label { display: flex; justify-content: space-between; font-size: 12px; color: #374151; margin-top: 8px; }
+.cat-bar-bg    { background: #f3f4f6; border-radius: 99px; height: 6px; margin: 3px 0 2px; }
+.cat-bar-fill  { background: #2563eb; border-radius: 99px; height: 6px; }
+.route-item { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
+.route-num  {
+    min-width: 24px; height: 24px; border-radius: 50%;
+    background: #2563eb; color: #fff;
+    font-size: 12px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.route-name { font-size: 13px; font-weight: 700; color: #111; }
+.route-sub  { font-size: 11px; color: #9ca3af; }
+.chat-msgs  { max-height: 320px; overflow-y: auto; margin-bottom: 10px; }
+.chat-user  {
+    background: #2563eb; color: #fff;
+    border-radius: 10px 10px 2px 10px;
+    padding: 7px 11px; margin: 4px 0;
+    font-size: 13px; text-align: right;
+}
+.chat-asst  {
+    background: #f3f4f6; color: #111;
+    border-radius: 10px 10px 10px 2px;
+    padding: 7px 11px; margin: 4px 0;
+    font-size: 13px;
+}
+.chat-hint  { font-size: 12px; color: #9ca3af; margin-bottom: 8px; }
+.insight-row {
+    display: flex; align-items: flex-start;
+    gap: 8px; padding: 6px 0;
+    border-bottom: 1px solid #f3f4f6;
+}
+.insight-num {
+    min-width: 22px; height: 22px; border-radius: 50%;
+    background: #2563eb; color: #fff;
+    font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; margin-top: 1px;
+}
+.insight-body { flex: 1; font-size: 13px; }
+.insight-name { font-weight: 600; color: #111; }
+.insight-sum  { font-size: 11px; color: #6b7280; }
+.proposal-banner-div {
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+}
+.header-h1  { font-size: 24px; font-weight: 800; color: #111; margin: 0 0 2px; }
+.header-sub { font-size: 13px; color: #6b7280; margin: 0; }
+.sugg-card  {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 14px; margin-bottom: 10px;
+}
+.sugg-date  { font-size: 12px; color: #6b7280; margin-bottom: 4px; }
+.sugg-title { font-size: 15px; font-weight: 700; color: #111; margin-bottom: 6px; }
+.sugg-desc  { font-size: 13px; color: #374151; margin-bottom: 6px; }
+.sugg-act   { font-size: 13px; color: #374151; }
 </style>
 """, unsafe_allow_html=True)
 
+
+# ─────────────────────────── helpers ────────────────────────────────────────
+
+def _esc(s: str) -> str:
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _weather_icon(condition: str) -> str:
+    return {"sunny": "☀️", "cloudy": "☁️", "rain": "🌧️", "storm": "⛈️", "snow": "❄️"}.get(condition, "🌤️")
+
+
+def _cat_badge(cat: str) -> str:
+    m = {
+        "sightseeing": ("Sightseeing", "pill-blue"),
+        "museum":      ("Museum",      "pill-purple"),
+        "restaurant":  ("Restaurant",  "pill-orange"),
+        "transport":   ("Transport",   "pill-gray"),
+        "break":       ("Pause",       "pill-green"),
+        "walk":        ("Spaziergang", "pill-green"),
+        "activity":    ("Aktivität",   "pill-blue"),
+    }
+    label, cls = m.get(cat, (cat.capitalize(), "pill-gray"))
+    return f'<span class="pill {cls}">{label}</span>'
+
+
+def _status_pill(status: str) -> str:
+    m = {
+        "completed": ("completed", "pill-green"),
+        "running":   ("running",   "pill-orange"),
+        "pending":   ("pending",   "pill-gray"),
+        "failed":    ("failed",    "pill-gray"),
+    }
+    label, cls = m.get(status, (status, "pill-gray"))
+    return f'<span class="pill {cls}">{label}</span>'
+
+
+# ─────────────────────────── session / data ──────────────────────────────────
 
 def init_session():
     if "trip_id" not in st.session_state:
@@ -57,10 +226,8 @@ def load_demo_trip():
     }
     trip = store.create_trip(demo_request)
     result = coordinator.handle_plan_request(demo_request, use_mock_weather=True)
-
     checklist_data = result["checklist"]
     checklist_data["trip_id"] = trip["id"]
-
     store.update_trip(trip["id"], {
         "active_plan": result["active_plan"],
         "checklist": checklist_data,
@@ -77,259 +244,242 @@ def simulate_rain_day2():
     trip = store.get_trip(trip_id)
     if not trip or not trip.get("active_plan"):
         return
-
     weather_event = {
         "day_number": 2,
         "condition": "rain",
         "severity": "medium",
         "description": "Starkregen erwartet",
     }
-
     all_activities = get_places(
         trip["request"]["destination"],
         trip["request"].get("interests", []),
     )
-
     proposal = replanning.create_replanning_proposal(trip, weather_event, all_activities)
     trip["proposals"].append(proposal)
-
     insight = replanning.get_agent_insight(len(proposal["changes"]))
     trip["agent_insights"].append(insight)
-
     store.update_trip(trip_id, {
         "proposals": trip["proposals"],
         "agent_insights": trip["agent_insights"],
     })
 
 
-def render_weather_icon(condition: str) -> str:
-    icons = {
-        "sunny": "☀️",
-        "cloudy": "☁️",
-        "rain": "🌧️",
-        "storm": "⛈️",
-        "snow": "❄️",
-    }
-    return icons.get(condition, "🌤️")
+# ─────────────────────────── column renderers ────────────────────────────────
 
+def render_left_col(trip: dict):
+    active_plan = trip.get("active_plan")
 
-def render_category_icon(category: str) -> str:
-    icons = {
-        "museum": "🏛️",
-        "restaurant": "🍽️",
-        "sightseeing": "📍",
-        "walk": "🚶",
-        "activity": "🎯",
-        "transport": "🚌",
-        "break": "☕",
-    }
-    return icons.get(category, "📌")
+    # Chat messages HTML
+    msgs_html = ""
+    for msg in st.session_state.chat_messages:
+        css = "chat-user" if msg["role"] == "user" else "chat-asst"
+        msgs_html += f'<div class="{css}">{_esc(msg["content"])}</div>'
 
-
-def render_tagesplan(plan: dict):
-    days = plan.get("days", [])
-    if not days:
-        st.info("Kein Tagesplan verfügbar.")
-        return
-
-    tab_labels = []
-    for day in days:
-        weather = day.get("weather")
-        icon = render_weather_icon(weather["condition"]) if weather else "📅"
-        tab_labels.append(f"{icon} Tag {day['day_number']}")
-
-    tabs = st.tabs(tab_labels)
-
-    for tab, day in zip(tabs, days):
-        with tab:
-            weather = day.get("weather")
-            col_title, col_weather = st.columns([3, 1])
-            with col_title:
-                st.markdown(f"### {day['title']}")
-                if day.get("date"):
-                    st.caption(f"Datum: {day['date']}")
-            with col_weather:
-                if weather:
-                    icon = render_weather_icon(weather["condition"])
-                    st.markdown(f"**{icon} {weather['description']}**")
-                    if weather.get("affects_outdoor_activities"):
-                        st.warning("Outdoor-Aktivitäten eingeschränkt")
-
-            st.divider()
-            slots = day.get("time_slots", [])
-            if not slots:
-                st.info("Keine Aktivitäten geplant.")
-                continue
-
-            for slot in slots:
-                act = slot["activity"]
-                icon = render_category_icon(act.get("category", ""))
-                with st.container():
-                    c1, c2, c3 = st.columns([1, 4, 1])
-                    with c1:
-                        st.markdown(f"**{slot['start_time']}**")
-                        st.caption(slot["end_time"])
-                    with c2:
-                        st.markdown(f"**{icon} {act['name']}**")
-                        st.caption(act.get("description", ""))
-                        loc = act.get("location", {})
-                        if loc.get("area"):
-                            st.caption(f"📍 {loc.get('name', '')} · {loc['area']}")
-                        score = act.get("score")
-                        if score:
-                            st.caption(
-                                f"Score: {score['overall_score']:.0%} · "
-                                f"Interessen: {score['interest_match']:.0%} · "
-                                f"Wetter: {score['weather_match']:.0%}"
-                            )
-                    with c3:
-                        cost = act.get("estimated_cost_total", 0.0)
-                        if cost > 0:
-                            st.metric("Kosten", f"{cost:.0f} €")
-                        else:
-                            st.markdown("**Kostenlos**")
-                    st.divider()
-
-
-def render_budget(budget_summary: dict):
-    status = budget_summary.get("status", "within_budget")
-    status_labels = {
-        "within_budget": ("Im Budget", "status-within"),
-        "near_limit": ("Nahe am Limit", "status-near"),
-        "over_budget": ("Über Budget!", "status-over"),
-    }
-    label, css_class = status_labels.get(status, ("Unbekannt", ""))
-
-    currency = budget_summary.get("currency", "EUR")
+    hint = "" if msgs_html else '<div class="chat-hint">Stell eine Frage zu deiner Reise, z.B. nach Budget, Wetter oder Aktivitäten.</div>'
 
     st.markdown(f"""
-    <div class="budget-box">
-        <p><strong>Gesamt-Budget:</strong> {budget_summary.get('budget_total', 0):.0f} {currency}</p>
-        <p><strong>Geplant:</strong> {budget_summary.get('planned_total', 0):.0f} {currency}</p>
-        <p><strong>Verbleibend:</strong> {budget_summary.get('remaining', 0):.0f} {currency}</p>
-        <p><strong>Pro Person:</strong> {budget_summary.get('per_person_total', 0):.0f} {currency}</p>
-        <p>Status: <span class="{css_class}">{label}</span></p>
+    <div class="card">
+        <div class="card-title">Chat</div>
+        <div class="chat-msgs">{hint}{msgs_html}</div>
     </div>
     """, unsafe_allow_html=True)
 
-    categories = budget_summary.get("categories", [])
-    if categories:
-        st.markdown("**Ausgaben nach Kategorie:**")
-        for cat in categories:
-            icon = render_category_icon(cat["category"])
-            st.progress(
-                cat["percentage"] / 100,
-                text=f"{icon} {cat['category'].capitalize()}: {cat['amount']:.0f} {currency} ({cat['percentage']:.0f}%)",
-            )
+    with st.form("chat_form", clear_on_submit=True):
+        user_input = st.text_input("", placeholder="Nachricht eingeben...", label_visibility="collapsed")
+        sent = st.form_submit_button("Senden", use_container_width=True, type="primary")
+        if sent and user_input.strip() and active_plan:
+            st.session_state.chat_messages.append({"role": "user", "content": user_input.strip()})
+            result = coordinator.handle_chat_message(trip, user_input.strip())
+            st.session_state.chat_messages.append({"role": "assistant", "content": result["message"]})
+            st.rerun()
+
+    # Agent Insights
+    insights = trip.get("agent_insights", [])
+    if insights:
+        rows_html = ""
+        for i, ins in enumerate(insights, 1):
+            label = _esc(ins.get("display_label", ins.get("agent_name", "Agent")))
+            summary = _esc(ins.get("summary", ""))
+            pill = _status_pill(ins.get("status", ""))
+            rows_html += f"""
+            <div class="insight-row">
+                <div class="insight-num">{i}</div>
+                <div class="insight-body">
+                    <div class="insight-name">{label}</div>
+                    <div class="insight-sum">{summary}</div>
+                </div>
+                {pill}
+            </div>"""
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-title">Agent Insights</div>
+            {rows_html}
+        </div>
+        """, unsafe_allow_html=True)
 
 
-def render_checklist(checklist: dict):
-    items = checklist.get("items", [])
-    if not items:
-        st.info("Keine Checkliste vorhanden.")
-        return
+def render_middle_col(plan: dict):
+    days = plan.get("days", [])
+    req = plan.get("request", {})
+    dest = _esc(req.get("destination", ""))
+    n_days = len(days)
 
-    categories = {}
-    for item in items:
-        cat = item.get("category", "other")
-        categories.setdefault(cat, []).append(item)
+    content_html = ""
+    for day in days:
+        weather = day.get("weather", {})
+        w_str = ""
+        if weather:
+            icon = _weather_icon(weather.get("condition", ""))
+            w_str = f"{icon} {_esc(weather.get('description', ''))}"
+            if weather.get("affects_outdoor_activities"):
+                w_str += " ⚠️"
 
-    cat_icons = {
-        "documents": "📄 Dokumente",
-        "booking": "🎫 Buchungen",
-        "packing": "🧳 Gepäck",
-        "preparation": "🔧 Vorbereitung",
+        content_html += f"""
+        <div class="day-header">
+            <div class="day-title">Tag {day['day_number']} – {_esc(day.get('title', ''))}</div>
+            <div class="day-weather">{w_str}</div>
+        </div>"""
+
+        for slot in day.get("time_slots", []):
+            act = slot["activity"]
+            badge = _cat_badge(act.get("category", ""))
+            desc = _esc(act.get("description", ""))
+            loc = act.get("location", {})
+            area = _esc(loc.get("area", ""))
+            score = act.get("score")
+            score_str = f"{score['overall_score']:.0%}" if score else "–"
+            cost = act.get("estimated_cost_total", 0.0)
+            cost_str = f"{cost:.0f} €" if cost > 0 else "Kostenlos"
+            indoor = _esc(act.get("indoor_outdoor", ""))
+            duration = act.get("duration_minutes", "")
+            meta_parts = [cost_str]
+            if indoor:
+                meta_parts.append(indoor)
+            if duration:
+                meta_parts.append(f"{duration} min")
+            meta_parts.append(f"Score {score_str}")
+
+            content_html += f"""
+            <div class="activity-card">
+                <div class="time-stripe">
+                    <div class="time-start">{_esc(slot.get('start_time', ''))}</div>
+                    <div class="time-end">{_esc(slot.get('end_time', ''))}</div>
+                </div>
+                <div class="act-body">
+                    <div class="act-header">
+                        <div class="act-name">{_esc(act['name'])}</div>
+                        {badge}
+                    </div>
+                    <div class="act-desc">{desc}{(' · ' + area) if area else ''}</div>
+                    <div class="act-meta">{' · '.join(meta_parts)}</div>
+                </div>
+            </div>"""
+
+    st.markdown(f"""
+    <div class="card" style="max-height:76vh;overflow-y:auto;">
+        <div class="card-title">
+            Tagesplan
+            <span class="pill pill-green">active</span>
+        </div>
+        <div style="font-size:13px;color:#6b7280;margin-bottom:10px;">{n_days} Tage für {dest}</div>
+        {content_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_right_col(plan: dict):
+    budget = plan.get("budget_summary", {})
+    currency = budget.get("currency", "EUR")
+    planned = budget.get("planned_total", 0)
+    total = budget.get("budget_total", 0)
+    remaining = budget.get("remaining", 0)
+    per_person = budget.get("per_person_total", 0)
+
+    status_map = {
+        "within_budget": ("Im Budget",   "pill-green"),
+        "near_limit":    ("Nahe Limit",  "pill-orange"),
+        "over_budget":   ("Über Budget", "pill-gray"),
     }
+    status_label, status_cls = status_map.get(budget.get("status", "within_budget"), ("–", "pill-gray"))
 
-    for cat_key, cat_items in categories.items():
-        st.markdown(f"**{cat_icons.get(cat_key, cat_key.capitalize())}**")
-        for item in cat_items:
-            priority_badge = "🔴" if item["priority"] == "high" else ("🟡" if item["priority"] == "medium" else "🟢")
-            new_val = st.checkbox(
-                f"{priority_badge} {item['label']}",
-                value=item["completed"],
-                key=f"checklist_{item['id']}",
-            )
-            if new_val != item["completed"]:
-                item["completed"] = new_val
-                trip_id = st.session_state.trip_id
-                if trip_id:
-                    trip = store.get_trip(trip_id)
-                    if trip and trip.get("checklist"):
-                        store.update_trip(trip_id, {"checklist": trip["checklist"]})
+    cats_html = ""
+    for cat in budget.get("categories", []):
+        pct = min(cat.get("percentage", 0), 100)
+        cats_html += f"""
+        <div class="cat-bar-label">
+            <span>{_esc(cat['category'].capitalize())}</span>
+            <span>{cat['amount']:.0f} {currency}</span>
+        </div>
+        <div class="cat-bar-bg">
+            <div class="cat-bar-fill" style="width:{pct}%"></div>
+        </div>"""
 
+    st.markdown(f"""
+    <div class="card">
+        <div class="card-title">
+            Budget
+            <span class="pill {status_cls}">{status_label}</span>
+        </div>
+        <div class="budget-hero">
+            <div class="budget-label">Geplant</div>
+            <div class="budget-amount">{planned:.0f} {currency}</div>
+            <div class="budget-sub">von {total:.0f} {currency}</div>
+        </div>
+        <div class="budget-row">
+            <span>Restbudget</span><span><strong>{remaining:.0f} {currency}</strong></span>
+        </div>
+        <div class="budget-row" style="margin-bottom:10px">
+            <span>Pro Person</span><span><strong>{per_person:.0f} {currency}</strong></span>
+        </div>
+        {cats_html}
+    </div>
+    """, unsafe_allow_html=True)
 
-def render_map(plan: dict):
-    all_locations = []
+    # Route card
+    locations = []
     for day in plan.get("days", []):
         for slot in day.get("time_slots", []):
             loc = slot["activity"].get("location", {})
-            if loc.get("lat") and loc.get("lng"):
-                all_locations.append({
-                    "name": slot["activity"]["name"],
-                    "lat": loc["lat"],
-                    "lng": loc["lng"],
-                    "category": slot["activity"].get("category", ""),
-                    "day": day["day_number"],
-                })
+            locations.append({
+                "name": slot["activity"]["name"],
+                "day": day["day_number"],
+                "start": slot.get("start_time", ""),
+                "area": loc.get("area", ""),
+            })
 
-    if not all_locations:
-        st.info("Keine Koordinaten für Kartenansicht verfügbar.")
-        return
+    if locations:
+        route_html = ""
+        for i, loc in enumerate(locations, 1):
+            sub = f"Tag {loc['day']} · {loc['start']}"
+            if loc["area"]:
+                sub += f" · {_esc(loc['area'])}"
+            route_html += f"""
+            <div class="route-item">
+                <div class="route-num">{i}</div>
+                <div>
+                    <div class="route-name">{_esc(loc['name'])}</div>
+                    <div class="route-sub">{sub}</div>
+                </div>
+            </div>"""
 
-    center_lat = sum(l["lat"] for l in all_locations) / len(all_locations)
-    center_lng = sum(l["lng"] for l in all_locations) / len(all_locations)
-
-    m = folium.Map(location=[center_lat, center_lng], zoom_start=13)
-
-    day_colors = ["red", "blue", "green", "purple", "orange"]
-    cat_icons_folium = {
-        "museum": "university",
-        "restaurant": "cutlery",
-        "sightseeing": "eye",
-        "walk": "tree",
-        "activity": "star",
-    }
-
-    for loc in all_locations:
-        color = day_colors[(loc["day"] - 1) % len(day_colors)]
-        icon_name = cat_icons_folium.get(loc["category"], "info-sign")
-        folium.Marker(
-            location=[loc["lat"], loc["lng"]],
-            popup=folium.Popup(f"Tag {loc['day']}: {loc['name']}", max_width=200),
-            tooltip=loc["name"],
-            icon=folium.Icon(color=color, icon=icon_name, prefix="glyphicon"),
-        ).add_to(m)
-
-    st_folium(m, width=700, height=400)
-
-
-def render_agent_insights(insights: list):
-    status_icons = {
-        "pending": "⏳",
-        "running": "🔄",
-        "completed": "✅",
-        "failed": "❌",
-    }
-    for insight in insights:
-        icon = status_icons.get(insight.get("status", ""), "•")
-        st.markdown(
-            f'<div class="agent-card">{icon} <strong>{insight.get("display_label", insight.get("agent_name", "Agent"))}</strong>: {insight.get("summary", "")}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"""
+        <div class="card" style="max-height:36vh;overflow-y:auto;">
+            <div class="card-title">Karte / Route</div>
+            {route_html}
+        </div>
+        """, unsafe_allow_html=True)
 
 
 def render_proposal_banner(trip: dict):
-    pending_proposals = [p for p in trip.get("proposals", []) if p["status"] == "pending"]
-    if not pending_proposals:
+    pending = [p for p in trip.get("proposals", []) if p["status"] == "pending"]
+    if not pending:
         return
-
-    proposal = pending_proposals[0]
+    proposal = pending[0]
 
     st.markdown(f"""
-    <div class="proposal-banner">
-        <strong>⚠️ Neuplanungsvorschlag (noch nicht übernommen)</strong><br>
-        <em>{proposal['reason']}</em>
+    <div class="proposal-banner-div">
+        <strong>⚠️ Neuplanungsvorschlag</strong> –
+        <em>{_esc(proposal.get('reason', ''))}</em>
     </div>
     """, unsafe_allow_html=True)
 
@@ -341,169 +491,189 @@ def render_proposal_banner(trip: dict):
 
     budget_before = proposal.get("budget_before", {})
     budget_after = proposal.get("budget_after", {})
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric(
-            "Budget vorher",
-            f"{budget_before.get('planned_total', 0):.0f} €",
-        )
-    with col2:
+    m1, m2 = st.columns(2)
+    with m1:
+        st.metric("Budget vorher", f"{budget_before.get('planned_total', 0):.0f} €")
+    with m2:
         delta = budget_after.get("planned_total", 0) - budget_before.get("planned_total", 0)
-        st.metric(
-            "Budget nachher",
-            f"{budget_after.get('planned_total', 0):.0f} €",
-            delta=f"{delta:+.0f} €",
-        )
+        st.metric("Budget nachher", f"{budget_after.get('planned_total', 0):.0f} €", delta=f"{delta:+.0f} €")
 
-    col_accept, col_reject = st.columns(2)
-    with col_accept:
-        if st.button("✅ Änderungen übernehmen", type="primary", key=f"accept_{proposal['id']}"):
+    ca, cr = st.columns(2)
+    with ca:
+        if st.button("✅ Annehmen", type="primary", key=f"prop_accept_{proposal['id']}"):
             proposal["status"] = "accepted"
             new_plan = proposal["proposed_plan"]
             new_plan["status"] = "active"
-            store.update_trip(trip["id"], {
-                "active_plan": new_plan,
-                "proposals": trip["proposals"],
-            })
+            store.update_trip(trip["id"], {"active_plan": new_plan, "proposals": trip["proposals"]})
             st.success("Neuplanung übernommen!")
             st.rerun()
-
-    with col_reject:
-        if st.button("❌ Ablehnen", key=f"reject_{proposal['id']}"):
+    with cr:
+        if st.button("❌ Ablehnen", key=f"prop_reject_{proposal['id']}"):
             proposal["status"] = "rejected"
             store.update_trip(trip["id"], {"proposals": trip["proposals"]})
             st.info("Vorschlag abgelehnt. Ursprünglicher Plan bleibt erhalten.")
             st.rerun()
 
 
-def render_chat(trip: dict):
-    for msg in st.session_state.chat_messages:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-
-    user_input = st.chat_input("Frage deinen Reiseassistenten...")
-    if user_input:
-        st.session_state.chat_messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.write(user_input)
-
-        result = coordinator.handle_chat_message(trip, user_input)
-        reply = result["message"]
-
-        st.session_state.chat_messages.append({"role": "assistant", "content": reply})
-        with st.chat_message("assistant"):
-            st.write(reply)
-
-
 def show_profile_and_suggestions():
-    import requests
-    st.subheader("Persönliches Profil & Vorschläge")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("Profil aktualisieren"):
-            r = requests.post("http://localhost:8000/api/profile/update")
-            data = r.json()
-            st.success(data["agent_insight"]["summary"])
-            for i in data.get("top_interests", []):
-                st.write(f"- {i['keyword']} ({i['category']})")
-    with col2:
-        if st.button("Freie Tage erkennen"):
-            r = requests.post("http://localhost:8000/api/profile/detect-free-days")
-            data = r.json()
-            st.success(data["agent_insight"]["summary"])
-    with col3:
-        home_city = st.text_input("Heimatstadt", value="Berlin")
-        if st.button("Vorschläge generieren"):
-            r = requests.post("http://localhost:8000/api/suggestions/generate", params={"home_city": home_city})
-            data = r.json()
-            st.success(data["agent_insight"]["summary"])
-    r = requests.get("http://localhost:8000/api/suggestions/pending")
-    suggestions = r.json().get("suggestions", [])
+    import requests as http
+
+    st.markdown("""
+    <div class="card">
+        <div class="card-title">Persönliches Profil &amp; Vorschläge</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Profil aktualisieren", use_container_width=True):
+            try:
+                r = http.post("http://localhost:8000/api/profile/update", timeout=10)
+                data = r.json()
+                st.success(data["agent_insight"]["summary"])
+                for item in data.get("top_interests", []):
+                    st.write(f"- {item['keyword']} ({item['category']})")
+            except Exception as e:
+                st.error(f"Backend nicht erreichbar: {e}")
+    with c2:
+        if st.button("Freie Tage erkennen", use_container_width=True):
+            try:
+                r = http.post("http://localhost:8000/api/profile/detect-free-days", timeout=10)
+                data = r.json()
+                st.success(data["agent_insight"]["summary"])
+            except Exception as e:
+                st.error(f"Backend nicht erreichbar: {e}")
+    with c3:
+        home_city = st.text_input("Heimatstadt", value="Berlin", key="home_city_input")
+        if st.button("Vorschläge generieren", use_container_width=True):
+            try:
+                r = http.post("http://localhost:8000/api/suggestions/generate", params={"home_city": home_city}, timeout=15)
+                data = r.json()
+                st.success(data["agent_insight"]["summary"])
+            except Exception as e:
+                st.error(f"Backend nicht erreichbar: {e}")
+
+    try:
+        r = http.get("http://localhost:8000/api/suggestions/pending", timeout=2)
+        suggestions = r.json().get("suggestions", [])
+    except Exception:
+        suggestions = []
+
     if suggestions:
-        st.subheader("Deine Vorschläge")
+        st.markdown("**Deine Vorschläge**")
         for s in suggestions:
-            with st.expander(f"{s['date']} – {s['title']}"):
-                st.write(s["description"])
-                for act in s.get("activities", []):
-                    st.write(f"- {act}")
-                if s.get("highlight"):
-                    st.info(s["highlight"])
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    if st.button("Annehmen", key=f"accept_{s['id']}"):
-                        requests.post(f"http://localhost:8000/api/suggestions/{s['id']}/accept")
-                        st.rerun()
-                with col_b:
-                    if st.button("Ablehnen", key=f"reject_{s['id']}"):
-                        requests.post(f"http://localhost:8000/api/suggestions/{s['id']}/reject")
-                        st.rerun()
+            acts_html = "".join(f'<div class="sugg-act">• {_esc(a)}</div>' for a in s.get("activities", []))
+            highlight_html = ""
+            if s.get("highlight"):
+                highlight_html = f'<div style="background:#eff6ff;border-radius:6px;padding:6px 10px;font-size:12px;color:#1d4ed8;margin-top:6px">{_esc(s["highlight"])}</div>'
+            st.markdown(f"""
+            <div class="sugg-card">
+                <div class="sugg-date">{_esc(s['date'])}</div>
+                <div class="sugg-title">{_esc(s['title'])}</div>
+                <div class="sugg-desc">{_esc(s.get('description', ''))}</div>
+                {acts_html}
+                {highlight_html}
+            </div>
+            """, unsafe_allow_html=True)
+            sa, sb = st.columns(2)
+            with sa:
+                if st.button("Annehmen", key=f"sugg_accept_{s['id']}", use_container_width=True):
+                    try:
+                        http.post(f"http://localhost:8000/api/suggestions/{s['id']}/accept", timeout=5)
+                    except Exception:
+                        pass
+                    st.rerun()
+            with sb:
+                if st.button("Ablehnen", key=f"sugg_reject_{s['id']}", use_container_width=True):
+                    try:
+                        http.post(f"http://localhost:8000/api/suggestions/{s['id']}/reject", timeout=5)
+                    except Exception:
+                        pass
+                    st.rerun()
     else:
         st.info("Noch keine Vorschläge. Profil aktualisieren und freie Tage erkennen.")
 
 
+# ─────────────────────────── main ────────────────────────────────────────────
+
 def main():
     init_session()
 
-    st.title("🗺️ Reiseplanungs-Agent")
-    st.caption("HTW Berlin · Unternehmensanwendungen mit KI")
-
-    col_demo, col_rain, col_plan = st.columns([2, 2, 3])
-    with col_demo:
-        if st.button("🚀 Demo-Reise laden (Berlin)", type="primary"):
-            with st.spinner("Plane Berlin-Reise..."):
-                load_demo_trip()
-            st.rerun()
-
-    trip = get_current_trip()
-
-    if trip and trip.get("active_plan"):
-        with col_rain:
-            if st.button("🌧️ Regen an Tag 2 simulieren"):
+    # ── Header ───────────────────────────────────────────────────────────────
+    h_left, h_right = st.columns([3, 2])
+    with h_left:
+        st.markdown("""
+        <div style="padding:4px 0 12px">
+            <p class="header-h1">Reiseplanungs-Agent</p>
+            <p class="header-sub">GenAI-gesteuerte Reiseplanung mit Chat, Tagesplan, Budget und Proposal Flow.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with h_right:
+        pill_col, demo_col, rain_col = st.columns([1, 2, 2])
+        with pill_col:
+            st.markdown('<div style="padding-top:8px"><span class="pill pill-green">API: online</span></div>', unsafe_allow_html=True)
+        with demo_col:
+            if st.button("Demo-Reise laden", type="primary", use_container_width=True):
+                with st.spinner("Plane Berlin-Reise..."):
+                    load_demo_trip()
+                st.rerun()
+        with rain_col:
+            trip_check = get_current_trip()
+            rain_disabled = not (trip_check and trip_check.get("active_plan"))
+            if st.button("Regen an Tag 2 simulieren", use_container_width=True, disabled=rain_disabled):
                 simulate_rain_day2()
                 st.rerun()
 
-    with col_plan:
-        with st.expander("Eigene Reise planen"):
-            with st.form("plan_form"):
+    # ── Eigene Reise planen ──────────────────────────────────────────────────
+    with st.expander("Eigene Reise planen"):
+        with st.form("plan_form"):
+            fc1, fc2, fc3 = st.columns(3)
+            with fc1:
                 dest = st.text_input("Reiseziel", "München")
-                days = st.slider("Tage", 1, 14, 3)
-                budget = st.number_input("Budget (EUR)", 100.0, 10000.0, 500.0, 50.0)
-                people = st.number_input("Personen", 1, 20, 2)
-                travel_type = st.selectbox("Reiseart", ["solo", "couple", "family", "group"])
-                interests = st.multiselect(
+                dur = st.slider("Tage", 1, 14, 3)
+            with fc2:
+                bud = st.number_input("Budget (EUR)", 100.0, 10000.0, 500.0, 50.0)
+                ppl = st.number_input("Personen", 1, 20, 2)
+            with fc3:
+                ttype = st.selectbox("Reiseart", ["solo", "couple", "family", "group"])
+                ints = st.multiselect(
                     "Interessen",
                     ["Museen", "gutes Essen", "Sehenswürdigkeiten", "Spaziergänge", "Natur", "Shopping"],
                     default=["Sehenswürdigkeiten", "gutes Essen"],
                 )
-                submitted = st.form_submit_button("Reise planen")
-                if submitted:
-                    request = {
-                        "destination": dest,
-                        "duration_days": days,
-                        "budget_total": budget,
-                        "currency": "EUR",
-                        "number_of_people": people,
-                        "travel_type": travel_type,
-                        "interests": interests or ["Sehenswürdigkeiten"],
-                    }
-                    with st.spinner("Plane Reise..."):
-                        trip_obj = store.create_trip(request)
-                        result = coordinator.handle_plan_request(request)
-                        checklist_data = result["checklist"]
-                        checklist_data["trip_id"] = trip_obj["id"]
-                        store.update_trip(trip_obj["id"], {
-                            "active_plan": result["active_plan"],
-                            "checklist": checklist_data,
-                            "agent_insights": result["agent_insights"],
-                        })
-                        st.session_state.trip_id = trip_obj["id"]
-                        st.session_state.chat_messages = []
-                    st.rerun()
+            if st.form_submit_button("Reise planen", type="primary"):
+                req = {
+                    "destination": dest,
+                    "duration_days": dur,
+                    "budget_total": bud,
+                    "currency": "EUR",
+                    "number_of_people": ppl,
+                    "travel_type": ttype,
+                    "interests": ints or ["Sehenswürdigkeiten"],
+                }
+                with st.spinner("Plane Reise..."):
+                    trip_obj = store.create_trip(req)
+                    result = coordinator.handle_plan_request(req)
+                    cl = result["checklist"]
+                    cl["trip_id"] = trip_obj["id"]
+                    store.update_trip(trip_obj["id"], {
+                        "active_plan": result["active_plan"],
+                        "checklist": cl,
+                        "agent_insights": result["agent_insights"],
+                    })
+                    st.session_state.trip_id = trip_obj["id"]
+                    st.session_state.chat_messages = []
+                st.rerun()
+
+    trip = get_current_trip()
 
     if not trip:
         st.info("Lade eine Demo-Reise oder plane eine eigene Reise, um zu starten.")
+        st.markdown("---")
+        show_profile_and_suggestions()
         return
 
+    # ── Proposal Banner ──────────────────────────────────────────────────────
     render_proposal_banner(trip)
 
     active_plan = trip.get("active_plan")
@@ -511,47 +681,19 @@ def main():
         st.warning("Kein aktiver Reiseplan gefunden.")
         return
 
-    req = trip["request"]
-    st.markdown(
-        f"**{req['destination']}** · {req['duration_days']} Tage · "
-        f"{req['budget_total']} {req['currency']} · "
-        f"{req['number_of_people']} Person(en) · {req['travel_type'].capitalize()} · "
-        f"Interessen: {', '.join(req['interests'])}"
-    )
+    # ── Three-column layout: 25% · 45% · 30% ────────────────────────────────
+    col_chat, col_plan, col_budget = st.columns([1, 1.8, 1.2])
 
-    main_col, side_col = st.columns([3, 1])
+    with col_chat:
+        render_left_col(trip)
 
-    with main_col:
-        tab_plan, tab_chat, tab_map = st.tabs(["📅 Tagesplan", "💬 Chat", "🗺️ Karte"])
+    with col_plan:
+        render_middle_col(active_plan)
 
-        with tab_plan:
-            render_tagesplan(active_plan)
+    with col_budget:
+        render_right_col(active_plan)
 
-        with tab_chat:
-            render_chat(trip)
-
-        with tab_map:
-            render_map(active_plan)
-
-    with side_col:
-        st.markdown("### 💰 Budget")
-        render_budget(active_plan["budget_summary"])
-
-        st.markdown("---")
-        st.markdown("### ✅ Checkliste")
-        if trip.get("checklist"):
-            render_checklist(trip["checklist"])
-        else:
-            st.info("Keine Checkliste vorhanden.")
-
-        st.markdown("---")
-        st.markdown("### 🤖 Agent Insights")
-        insights = trip.get("agent_insights", [])
-        if insights:
-            render_agent_insights(insights)
-        else:
-            st.info("Keine Insights verfügbar.")
-
+    # ── Profile & Suggestions ────────────────────────────────────────────────
     st.markdown("---")
     show_profile_and_suggestions()
 
