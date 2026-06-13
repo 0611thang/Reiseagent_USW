@@ -71,41 +71,39 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
 
 
 def handle_chat_message(trip: dict, message: str) -> dict:
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    api_key = os.getenv("GROQ_API_KEY", "")
     if api_key:
-        return _claude_response(trip, message, api_key)
+        return _groq_response(trip, message, api_key)
     return _rule_based_response(trip, message)
 
 
-def _claude_response(trip: dict, message: str, api_key: str) -> dict:
+def _groq_response(trip: dict, message: str, api_key: str) -> dict:
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        from groq import Groq
+        client = Groq(api_key=api_key)
         trip_summary = _create_trip_summary(trip)
 
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+        prompt = (
+            f"Du bist ein freundlicher Reiseassistent. Hier ist der aktuelle Reiseplan:\n"
+            f"{trip_summary}\n\n"
+            f"Nutzerfrage: {message}\n\n"
+            f"Antworte auf Deutsch, kurz und hilfreich."
+        )
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             max_tokens=500,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Du bist ein freundlicher Reiseassistent. Hier ist der aktuelle Reiseplan:\n"
-                    f"{trip_summary}\n\n"
-                    f"Nutzerfrage: {message}\n\n"
-                    f"Antworte auf Deutsch, kurz und hilfreich."
-                ),
-            }],
+            messages=[{"role": "user", "content": prompt}],
         )
         return {
-            "message": response.content[0].text,
+            "message": response.choices[0].message.content,
             "agent_insights": [{
                 "agent_name": "coordinator",
                 "display_label": "Coordinator Agent",
                 "status": "completed",
-                "summary": "Chat-Antwort via Claude API generiert.",
+                "summary": "Chat-Antwort via Groq API generiert.",
             }],
         }
-    except Exception as e:
+    except Exception:
         return _rule_based_response(trip, message)
 
 

@@ -395,6 +395,52 @@ def render_chat(trip: dict):
             st.write(reply)
 
 
+def show_profile_and_suggestions():
+    import requests
+    st.subheader("Persönliches Profil & Vorschläge")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("Profil aktualisieren"):
+            r = requests.post("http://localhost:8000/api/profile/update")
+            data = r.json()
+            st.success(data["agent_insight"]["summary"])
+            for i in data.get("top_interests", []):
+                st.write(f"- {i['keyword']} ({i['category']})")
+    with col2:
+        if st.button("Freie Tage erkennen"):
+            r = requests.post("http://localhost:8000/api/profile/detect-free-days")
+            data = r.json()
+            st.success(data["agent_insight"]["summary"])
+    with col3:
+        home_city = st.text_input("Heimatstadt", value="Berlin")
+        if st.button("Vorschläge generieren"):
+            r = requests.post("http://localhost:8000/api/suggestions/generate", params={"home_city": home_city})
+            data = r.json()
+            st.success(data["agent_insight"]["summary"])
+    r = requests.get("http://localhost:8000/api/suggestions/pending")
+    suggestions = r.json().get("suggestions", [])
+    if suggestions:
+        st.subheader("Deine Vorschläge")
+        for s in suggestions:
+            with st.expander(f"{s['date']} – {s['title']}"):
+                st.write(s["description"])
+                for act in s.get("activities", []):
+                    st.write(f"- {act}")
+                if s.get("highlight"):
+                    st.info(s["highlight"])
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("Annehmen", key=f"accept_{s['id']}"):
+                        requests.post(f"http://localhost:8000/api/suggestions/{s['id']}/accept")
+                        st.rerun()
+                with col_b:
+                    if st.button("Ablehnen", key=f"reject_{s['id']}"):
+                        requests.post(f"http://localhost:8000/api/suggestions/{s['id']}/reject")
+                        st.rerun()
+    else:
+        st.info("Noch keine Vorschläge. Profil aktualisieren und freie Tage erkennen.")
+
+
 def main():
     init_session()
 
@@ -505,6 +551,9 @@ def main():
             render_agent_insights(insights)
         else:
             st.info("Keine Insights verfügbar.")
+
+    st.markdown("---")
+    show_profile_and_suggestions()
 
 
 if __name__ == "__main__":

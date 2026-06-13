@@ -4,6 +4,10 @@ streamlit
 streamlit-folium
 folium
 httpx
-anthropic
 python-dotenv
 pydantic
+groq
+google-auth
+google-auth-oauthlib
+google-api-python-client
+requests

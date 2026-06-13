@@ -11,8 +11,15 @@ from pydantic import BaseModel
 
 import store
 from agents import coordinator, replanning, budget
+from agents.navigation import create_navigation_reminder
+from agents.daily_brief import create_daily_brief
+from agents.profile_learner import run_profile_update
+from agents.free_time_detector import detect_and_save_free_days
+from agents.suggestion_agent import create_suggestions_for_upcoming_free_days
 from providers.places import get_places
 from providers.weather import get_weather_for_trip
+from providers.navigation import get_route
+import profile_store
 
 app = FastAPI(title="Reiseplanungs-Agent API", version="1.0.0")
 
@@ -211,6 +218,83 @@ def update_checklist_item(trip_id: str, item_id: str, body: ChecklistItemUpdateB
     store.update_trip(trip_id, {"checklist": trip["checklist"]})
 
     return {"id": item_id, "completed": body.completed}
+
+
+@app.get("/api/trips/{trip_id}/navigation/{day_number}/{slot_index}")
+def get_navigation(trip_id: str, day_number: int, slot_index: int):
+    trip = store.get_trip(trip_id)
+    if not trip or not trip.get("active_plan"):
+        raise HTTPException(status_code=404, detail="Trip oder Plan nicht gefunden.")
+
+    day = next((d for d in trip["active_plan"]["days"] if d["day_number"] == day_number), None)
+    if not day:
+        raise HTTPException(status_code=404, detail="Tag nicht gefunden.")
+
+    slots = day.get("time_slots", [])
+    if slot_index >= len(slots):
+        raise HTTPException(status_code=404, detail="Slot nicht gefunden.")
+
+    activity = slots[slot_index]["activity"]
+    loc = activity.get("location", {})
+    lat = loc.get("lat")
+    lng = loc.get("lng")
+
+    route = None
+    if lat and lng and slot_index > 0:
+        prev_loc = slots[slot_index - 1]["activity"].get("location", {})
+        prev_lat = prev_loc.get("lat")
+        prev_lng = prev_loc.get("lng")
+        if prev_lat and prev_lng:
+            route = get_route(prev_lat, prev_lng, lat, lng)
+
+    reminder = create_navigation_reminder(activity["name"], route)
+    return {"activity": activity["name"], "route": route, "reminder": reminder}
+
+
+@app.get("/api/trips/{trip_id}/daily-brief/{day_number}")
+def get_daily_brief(trip_id: str, day_number: int):
+    trip = store.get_trip(trip_id)
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip nicht gefunden.")
+    brief = create_daily_brief(trip, day_number)
+    return {"brief": brief, "day_number": day_number}
+
+
+@app.post("/api/profile/update")
+def update_profile():
+    from providers.telegram import get_recent_messages
+    from providers.gmail import get_recent_emails
+    telegram_msgs = get_recent_messages(hours=72)
+    gmail_emails = get_recent_emails(hours=72)
+    return run_profile_update(telegram_messages=telegram_msgs, gmail_emails=gmail_emails)
+
+@app.post("/api/profile/detect-free-days")
+def detect_free_days():
+    return detect_and_save_free_days(days_ahead=21)
+
+@app.get("/api/profile/interests")
+def get_interests():
+    profile_store.init_db()
+    return {"interests": profile_store.get_top_interests(limit=15)}
+
+@app.post("/api/suggestions/generate")
+def generate_suggestions(home_city: str = "Berlin"):
+    return create_suggestions_for_upcoming_free_days(home_city=home_city, max_suggestions=3)
+
+@app.get("/api/suggestions/pending")
+def get_pending_suggestions():
+    profile_store.init_db()
+    return {"suggestions": profile_store.get_pending_suggestions()}
+
+@app.post("/api/suggestions/{suggestion_id}/accept")
+def accept_suggestion(suggestion_id: int):
+    profile_store.update_suggestion_status(suggestion_id, "accepted")
+    return {"status": "accepted"}
+
+@app.post("/api/suggestions/{suggestion_id}/reject")
+def reject_suggestion(suggestion_id: int):
+    profile_store.update_suggestion_status(suggestion_id, "rejected")
+    return {"status": "rejected"}
 
 
 if __name__ == "__main__":
