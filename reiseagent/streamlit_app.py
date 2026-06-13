@@ -412,38 +412,43 @@ def render_right_col(plan: dict):
     }
     status_label, status_cls = status_map.get(budget.get("status", "within_budget"), ("–", "pill-gray"))
 
+    pill_colors = {"pill-green": "#166534;background:#dcfce7", "pill-orange": "#92400e;background:#fef3c7", "pill-gray": "#374151;background:#f3f4f6"}
+    pill_style = pill_colors.get(status_cls, pill_colors["pill-gray"])
+
     cats_html = ""
     for cat in budget.get("categories", []):
         pct = min(cat.get("percentage", 0), 100)
-        cats_html += f"""
-        <div class="cat-bar-label">
-            <span>{_esc(cat['category'].capitalize())}</span>
-            <span>{cat['amount']:.0f} {currency}</span>
-        </div>
-        <div class="cat-bar-bg">
-            <div class="cat-bar-fill" style="width:{pct}%"></div>
-        </div>"""
+        cats_html += (
+            '<div style="display:flex;justify-content:space-between;font-size:12px;color:#374151;margin-top:8px;">'
+            f'<span>{_esc(cat["category"].capitalize())}</span>'
+            f'<span>{cat["amount"]:.0f} {currency}</span>'
+            '</div>'
+            '<div style="background:#f3f4f6;border-radius:99px;height:6px;margin:3px 0 2px;">'
+            f'<div style="background:#2563eb;border-radius:99px;height:6px;width:{pct}%;"></div>'
+            '</div>'
+        )
 
-    st.markdown(f"""
-    <div class="card">
-        <div class="card-title">
-            Budget
-            <span class="pill {status_cls}">{status_label}</span>
-        </div>
-        <div class="budget-hero">
-            <div class="budget-label">Geplant</div>
-            <div class="budget-amount">{planned:.0f} {currency}</div>
-            <div class="budget-sub">von {total:.0f} {currency}</div>
-        </div>
-        <div class="budget-row">
-            <span>Restbudget</span><span><strong>{remaining:.0f} {currency}</strong></span>
-        </div>
-        <div class="budget-row" style="margin-bottom:10px">
-            <span>Pro Person</span><span><strong>{per_person:.0f} {currency}</strong></span>
-        </div>
-        {cats_html}
-    </div>
-    """, unsafe_allow_html=True)
+    html = (
+        '<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);padding:16px;margin-bottom:12px;">'
+        '<div style="font-size:15px;font-weight:700;color:#111;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">'
+        'Budget'
+        f'<span style="padding:2px 10px;border-radius:99px;font-size:12px;font-weight:600;color:{pill_style};">{status_label}</span>'
+        '</div>'
+        '<div style="text-align:center;padding:12px 0 8px;">'
+        '<div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">Geplant</div>'
+        f'<div style="font-size:28px;font-weight:800;color:#111;">{planned:.0f} {currency}</div>'
+        f'<div style="font-size:12px;color:#6b7280;">von {total:.0f} {currency}</div>'
+        '</div>'
+        '<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;">'
+        f'<span>Restbudget</span><span><strong>{remaining:.0f} {currency}</strong></span>'
+        '</div>'
+        '<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;margin-bottom:10px;">'
+        f'<span>Pro Person</span><span><strong>{per_person:.0f} {currency}</strong></span>'
+        '</div>'
+        + cats_html +
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
     # Route card
     locations = []
@@ -460,24 +465,27 @@ def render_right_col(plan: dict):
     if locations:
         route_html = ""
         for i, loc in enumerate(locations, 1):
-            sub = f"Tag {loc['day']} · {loc['start']}"
+            sub = f"Tag {loc['day']} &middot; {loc['start']}"
             if loc["area"]:
-                sub += f" · {_esc(loc['area'])}"
-            route_html += f"""
-            <div class="route-item">
-                <div class="route-num">{i}</div>
-                <div>
-                    <div class="route-name">{_esc(loc['name'])}</div>
-                    <div class="route-sub">{sub}</div>
-                </div>
-            </div>"""
+                sub += f" &middot; {_esc(loc['area'])}"
+            route_html += (
+                '<div style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid #f3f4f6;">'
+                f'<div style="min-width:22px;height:22px;border-radius:50%;background:#2563eb;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;">{i}</div>'
+                '<div>'
+                f'<div style="font-size:13px;font-weight:600;color:#111;">{_esc(loc["name"])}</div>'
+                f'<div style="font-size:11px;color:#6b7280;">{sub}</div>'
+                '</div>'
+                '</div>'
+            )
 
-        st.markdown(f"""
-        <div class="card" style="max-height:36vh;overflow-y:auto;">
-            <div class="card-title">Karte / Route</div>
-            {route_html}
-        </div>
-        """, unsafe_allow_html=True)
+        html = (
+            '<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);'
+            'padding:16px;margin-bottom:12px;max-height:36vh;overflow-y:auto;">'
+            '<div style="font-size:15px;font-weight:700;color:#111;margin-bottom:10px;">Karte / Route</div>'
+            + route_html +
+            '</div>'
+        )
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def render_proposal_banner(trip: dict):
