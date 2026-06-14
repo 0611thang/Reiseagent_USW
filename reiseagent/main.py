@@ -18,7 +18,7 @@ from agents.navigation import create_navigation_reminder
 from agents.daily_brief import create_daily_brief
 from agents.profile_learner import run_profile_update
 from agents.free_time_detector import detect_and_save_free_days
-from agents.suggestion_agent import create_suggestions_for_upcoming_free_days
+from agents.suggestion_agent import create_replacement_suggestion, create_suggestions_for_upcoming_free_days
 from providers.places import get_places
 from providers.weather import get_weather_for_trip
 from providers.navigation import get_route
@@ -336,9 +336,10 @@ def accept_suggestion(suggestion_id: int):
     return {"status": "accepted"}
 
 @app.post("/api/suggestions/{suggestion_id}/reject")
-def reject_suggestion(suggestion_id: int):
+def reject_suggestion(suggestion_id: int, home_city: str = "Berlin"):
     profile_store.update_suggestion_status(suggestion_id, "rejected")
-    return {"status": "rejected"}
+    replacement = create_replacement_suggestion(suggestion_id, home_city=home_city)
+    return {"status": "rejected", "replacement": replacement}
 
 @app.post("/api/trips/{trip_id}/monitor")
 def run_monitoring_for_trip(trip_id: str):

@@ -604,7 +604,11 @@ def show_profile_and_suggestions():
             with sb:
                 if st.button("Ablehnen", key=f"sugg_reject_{s['id']}", use_container_width=True):
                     try:
-                        http.post(f"http://localhost:8000/api/suggestions/{s['id']}/reject", timeout=5)
+                        http.post(
+                            f"http://localhost:8000/api/suggestions/{s['id']}/reject",
+                            params={"home_city": home_city},
+                            timeout=5,
+                        )
                     except Exception:
                         pass
                     st.rerun()

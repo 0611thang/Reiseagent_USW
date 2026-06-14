@@ -74,6 +74,27 @@ def save_suggestion(date_str, title, description, activities):
     conn.commit()
     conn.close()
 
+def get_suggestion(suggestion_id):
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM suggestions WHERE id=?", (suggestion_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    result = dict(row)
+    result["activities"] = json.loads(result["activities"])
+    return result
+
+def get_suggestions_for_date(date_str):
+    conn = _get_conn()
+    rows = conn.execute("SELECT * FROM suggestions WHERE date=? ORDER BY created_at ASC, id ASC", (date_str,)).fetchall()
+    conn.close()
+    results = []
+    for row in rows:
+        result = dict(row)
+        result["activities"] = json.loads(result["activities"])
+        results.append(result)
+    return results
+
 def get_top_interests(limit=10):
     conn = _get_conn()
     rows = conn.execute("SELECT category, keyword, SUM(score) as total FROM interests GROUP BY category, keyword ORDER BY total DESC LIMIT ?", (limit,)).fetchall()
@@ -109,5 +130,11 @@ def get_pending_suggestions():
 def update_suggestion_status(suggestion_id, status):
     conn = _get_conn()
     conn.execute("UPDATE suggestions SET status=? WHERE id=?", (status, suggestion_id))
+    conn.commit()
+    conn.close()
+
+def update_pending_suggestions_status(status):
+    conn = _get_conn()
+    conn.execute("UPDATE suggestions SET status=? WHERE status='pending'", (status,))
     conn.commit()
     conn.close()
