@@ -1,3 +1,6 @@
+from typing import Optional
+import threading
+import time
 import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
@@ -10,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import store
-from agents import coordinator, replanning, budget
+from agents import coordinator, replanning, budget, monitoring
 from agents.navigation import create_navigation_reminder
 from agents.daily_brief import create_daily_brief
 from agents.profile_learner import run_profile_update
@@ -30,6 +33,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+MONITORING_INTERVAL_SECONDS = int(os.getenv("MONITORING_INTERVAL_SECONDS", "1800"))
+_monitoring_thread_started = False
+
+
+def _monitoring_loop():
+    while True:
+        try:
+            monitoring.monitor_all_active_trips()
+        except Exception as exc:
+            print(f"[monitoring] Fehler im Hintergrundlauf: {exc}")
+
+        time.sleep(MONITORING_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+def start_background_monitoring():
+    global _monitoring_thread_started
+
+    if _monitoring_thread_started:
+        return
+
+    _monitoring_thread_started = True
+
+    thread = threading.Thread(target=_monitoring_loop, daemon=True)
+    thread.start()
+
+    print(
+        "[monitoring] Hintergrund-Monitoring gestartet: "
+        f"alle {MONITORING_INTERVAL_SECONDS} Sekunden"
+    )
+
 
 class TripRequestBody(BaseModel):
     destination: str
@@ -39,6 +73,12 @@ class TripRequestBody(BaseModel):
     number_of_people: int
     travel_type: str
     interests: list[str]
+
+    origin_airport: Optional[str] = None
+    destination_airport: Optional[str] = None
+    departure_date: Optional[str] = None
+    return_date: Optional[str] = None
+    flight_number: Optional[str] = None
 
 
 class ChatBody(BaseModel):
@@ -65,6 +105,10 @@ def _build_trip_response(trip: dict) -> dict:
         "checklist": trip["checklist"],
         "agent_insights": trip["agent_insights"],
         "chat_messages": trip["chat_messages"],
+        "weather_updates": trip.get("weather_updates", []),
+        "flight_updates": trip.get("flight_updates"),
+        "last_weather_update": trip.get("last_weather_update"),
+        "last_flight_update": trip.get("last_flight_update"),
     }
 
 
@@ -295,6 +339,20 @@ def accept_suggestion(suggestion_id: int):
 def reject_suggestion(suggestion_id: int):
     profile_store.update_suggestion_status(suggestion_id, "rejected")
     return {"status": "rejected"}
+
+@app.post("/api/trips/{trip_id}/monitor")
+def run_monitoring_for_trip(trip_id: str):
+    result = monitoring.monitor_trip(trip_id)
+
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    return result
+
+
+@app.post("/api/monitoring/run")
+def run_monitoring_now():
+    return monitoring.monitor_all_active_trips()
 
 
 if __name__ == "__main__":
