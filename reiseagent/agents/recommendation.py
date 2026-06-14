@@ -67,13 +67,18 @@ def score_activity(activity: dict, request: dict, weather: dict | None) -> dict:
         weather_match = 0.6
 
     location_match = 0.8
+    quality_match = activity.get("quality_score", 50) / 100
+    highlight_bonus = 0.12 if activity.get("source") == "city_highlight" else 0
 
     overall = (
-        interest_match * 0.35
-        + budget_match * 0.25
-        + weather_match * 0.25
-        + location_match * 0.15
+        interest_match * 0.30
+        + budget_match * 0.20
+        + weather_match * 0.20
+        + location_match * 0.10
+        + quality_match * 0.20
+        + highlight_bonus
     )
+    overall = min(overall, 1.0)
 
     explanation_parts = []
     if interest_match >= 0.5:
@@ -91,6 +96,8 @@ def score_activity(activity: dict, request: dict, weather: dict | None) -> dict:
         "budget_match": round(budget_match, 3),
         "weather_match": round(weather_match, 3),
         "location_match": round(location_match, 3),
+        "quality_match": round(quality_match, 3),
+        "highlight_bonus": round(highlight_bonus, 3),
         "overall_score": round(overall, 3),
         "explanation": ", ".join(explanation_parts),
     }
@@ -116,7 +123,13 @@ def pick_activities_for_day(
         )
         scored.append(act)
 
-    scored.sort(key=lambda a: a["score"]["overall_score"], reverse=True)
+    scored.sort(
+        key=lambda a: (
+            a["score"]["overall_score"],
+            a.get("quality_score", 0),
+        ),
+        reverse=True,
+    )
 
     selected = []
     used_categories: list[str] = []

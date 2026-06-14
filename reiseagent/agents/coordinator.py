@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 from providers.weather import get_weather_for_trip
-from providers.places import get_places
+import providers.places as places_provider
 from agents import planning, budget, checklist, recommendation, replanning
 
 
@@ -25,12 +25,15 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
         "summary": f"Wetterdaten für {request['destination']} ({len(weather)} Tage) geladen.",
     })
 
-    all_activities = get_places(request["destination"], request.get("interests", []))
+    all_activities = places_provider.get_places(request["destination"], request.get("interests", []))
     insights.append({
         "agent_name": "places_agent",
         "display_label": "POI Agent",
         "status": "completed",
-        "summary": f"{len(all_activities)} Aktivitäten für {request['destination']} geladen.",
+        "summary": (
+            f"{len(all_activities)} Aktivitäten für {request['destination']} geladen. "
+            f"{places_provider.LAST_PLACES_STATUS}"
+        ),
     })
 
     days = planning.create_plan(request, all_activities, weather)
