@@ -4,9 +4,15 @@ KNOWN_CITIES = {
     "berlin": {"lat": 52.52, "lng": 13.405},
     "muenchen": {"lat": 48.1351, "lng": 11.5820},
     "munich": {"lat": 48.1351, "lng": 11.5820},
-    "hamburg": {"lat": 53.5753, "lng": 10.0153},
     "koeln": {"lat": 50.9333, "lng": 6.9500},
     "cologne": {"lat": 50.9333, "lng": 6.9500},
+    "duesseldorf": {"lat": 51.2277, "lng": 6.7735},
+    "dusseldorf": {"lat": 51.2277, "lng": 6.7735},
+    "nuernberg": {"lat": 49.4521, "lng": 11.0767},
+    "nuremberg": {"lat": 49.4521, "lng": 11.0767},
+    "bruessel": {"lat": 50.8503, "lng": 4.3517},
+    "brussels": {"lat": 50.8503, "lng": 4.3517},
+    "hamburg": {"lat": 53.5753, "lng": 10.0153},
     "frankfurt": {"lat": 50.1109, "lng": 8.6821},
     "paris": {"lat": 48.8566, "lng": 2.3522},
     "london": {"lat": 51.5074, "lng": -0.1278},
@@ -25,10 +31,10 @@ def _normalize_city_name(destination: str) -> str:
         .replace("ö", "oe")
         .replace("ü", "ue")
         .replace("ß", "ss")
-        .replace("Ã¤", "ae")
-        .replace("Ã¶", "oe")
-        .replace("Ã¼", "ue")
-        .replace("ÃŸ", "ss")
+        .replace("\u00c3\u00a4", "ae")
+        .replace("\u00c3\u00b6", "oe")
+        .replace("\u00c3\u00bc", "ue")
+        .replace("\u00c3\u009f", "ss")
     )
 
 

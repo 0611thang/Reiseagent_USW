@@ -59,7 +59,7 @@ IMPORTANT_NAME_WORDS = [
 ]
 
 # Kleine Demo-Ergaenzung: OpenTripMap bleibt die Hauptquelle, aber diese
-# bekannten Highlights verhindern schwache Plaene fuer Praesentationsstaedte.
+# bekannten Highlights verhindern schwache Pläne für Präsentationsstädte.
 CITY_HIGHLIGHTS = {
     "paris": [
         ("Eiffel Tower", "sightseeing", 48.8584, 2.2945),
@@ -176,7 +176,7 @@ CITY_HIGHLIGHTS = {
         ("Olympiapark", "walk", 48.1733, 11.5516),
         ("BMW Welt", "museum", 48.1768, 11.5562),
         ("Pinakothek der Moderne", "museum", 48.1472, 11.5720),
-        ("Hofbraeuhaus Muenchen", "restaurant", 48.1376, 11.5799),
+        ("Hofbräuhaus München", "restaurant", 48.1376, 11.5799),
         ("Asamkirche", "sightseeing", 48.1351, 11.5698),
         ("Frauenkirche", "sightseeing", 48.1386, 11.5736),
         ("Odeonsplatz", "sightseeing", 48.1428, 11.5774),
@@ -206,7 +206,7 @@ CITY_HIGHLIGHTS = {
         ("Olympiapark", "walk", 48.1733, 11.5516),
         ("BMW Welt", "museum", 48.1768, 11.5562),
         ("Pinakothek der Moderne", "museum", 48.1472, 11.5720),
-        ("Hofbraeuhaus Muenchen", "restaurant", 48.1376, 11.5799),
+        ("Hofbräuhaus München", "restaurant", 48.1376, 11.5799),
         ("Asamkirche", "sightseeing", 48.1351, 11.5698),
         ("Frauenkirche", "sightseeing", 48.1386, 11.5736),
         ("Odeonsplatz", "sightseeing", 48.1428, 11.5774),
@@ -299,16 +299,15 @@ GENERIC_ACTIVITIES = [
 def _normalize_text(text: str) -> str:
     return (
         text.lower()
-        .replace("ä", "ae")
-        .replace("ö", "oe")
-        .replace("ü", "ue")
-        .replace("ß", "ss")
-        .replace("ä", "ae")
-        .replace("ö", "oe")
-        .replace("ü", "ue")
-        .replace("ß", "ss")
+        .replace("?", "ae")
+        .replace("?", "oe")
+        .replace("?", "ue")
+        .replace("?", "ss")
+        .replace("\u00c3\u00a4", "ae")
+        .replace("\u00c3\u00b6", "oe")
+        .replace("\u00c3\u00bc", "ue")
+        .replace("\u00c3\u009f", "ss")
     )
-
 
 def _fetch_from_opentripmap(destination: str, interests: list) -> list:
     global LAST_PLACES_STATUS
@@ -320,7 +319,7 @@ def _fetch_from_opentripmap(destination: str, interests: list) -> list:
 
     coords = get_coordinates(destination)
     if not coords:
-        LAST_PLACES_STATUS = f"OpenTripMap nicht genutzt: keine Koordinaten fuer {destination}."
+        LAST_PLACES_STATUS = f"OpenTripMap nicht genutzt: keine Koordinaten für {destination}."
         return []
 
     try:
@@ -374,7 +373,7 @@ def _fetch_from_opentripmap(destination: str, interests: list) -> list:
                     "indoor_outdoor": _guess_indoor_outdoor(kinds_text),
                     "tags": _extract_tags(kinds_text, interests),
                     "quality_score": quality_score,
-                    "reasoning": f"Empfehlung via OpenTripMap fuer {destination}.",
+                    "reasoning": f"Empfehlung via OpenTripMap für {destination}.",
                     "source": "opentripmap",
                 })
 
@@ -545,7 +544,7 @@ def _get_city_highlight_activities(destination: str) -> list:
             "indoor_outdoor": "indoor" if category == "museum" else "mixed",
             "tags": _tags_for_category(category),
             "quality_score": 100,
-            "reasoning": f"Bekanntes Stadt-Highlight fuer {destination}.",
+            "reasoning": f"Bekanntes Stadt-Highlight für {destination}.",
             "source": "city_highlight",
         })
 
@@ -625,5 +624,5 @@ def get_places(destination: str, interests: list) -> list:
             LAST_PLACES_STATUS = f"{LAST_PLACES_STATUS} Fallback: Stadt-Highlights verwendet."
         return combined_results
 
-    LAST_PLACES_STATUS = f"{LAST_PLACES_STATUS} Fallback: generische Aktivitaeten verwendet."
+    LAST_PLACES_STATUS = f"{LAST_PLACES_STATUS} Fallback: generische Aktivitäten verwendet."
     return GENERIC_ACTIVITIES
