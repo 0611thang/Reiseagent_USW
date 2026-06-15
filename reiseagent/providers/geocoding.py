@@ -2,20 +2,38 @@ import httpx
 
 KNOWN_CITIES = {
     "berlin": {"lat": 52.52, "lng": 13.405},
-    "münchen": {"lat": 48.1351, "lng": 11.5820},
+    "muenchen": {"lat": 48.1351, "lng": 11.5820},
+    "munich": {"lat": 48.1351, "lng": 11.5820},
     "hamburg": {"lat": 53.5753, "lng": 10.0153},
-    "köln": {"lat": 50.9333, "lng": 6.9500},
+    "koeln": {"lat": 50.9333, "lng": 6.9500},
+    "cologne": {"lat": 50.9333, "lng": 6.9500},
     "frankfurt": {"lat": 50.1109, "lng": 8.6821},
     "paris": {"lat": 48.8566, "lng": 2.3522},
     "london": {"lat": 51.5074, "lng": -0.1278},
     "amsterdam": {"lat": 52.3676, "lng": 4.9041},
     "rome": {"lat": 41.9028, "lng": 12.4964},
+    "rom": {"lat": 41.9028, "lng": 12.4964},
     "barcelona": {"lat": 41.3851, "lng": 2.1734},
 }
 
 
+def _normalize_city_name(destination: str) -> str:
+    return (
+        destination.lower()
+        .strip()
+        .replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+        .replace("Ã¤", "ae")
+        .replace("Ã¶", "oe")
+        .replace("Ã¼", "ue")
+        .replace("ÃŸ", "ss")
+    )
+
+
 def get_coordinates(destination: str) -> dict | None:
-    key = destination.lower().strip()
+    key = _normalize_city_name(destination)
     if key in KNOWN_CITIES:
         return KNOWN_CITIES[key]
 

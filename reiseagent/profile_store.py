@@ -68,6 +68,14 @@ def save_free_day(date_str):
     conn.commit()
     conn.close()
 
+def replace_free_days(date_list):
+    conn = _get_conn()
+    conn.execute("DELETE FROM free_days")
+    for date_str in date_list:
+        conn.execute("INSERT OR IGNORE INTO free_days (date) VALUES (?)", (date_str,))
+    conn.commit()
+    conn.close()
+
 def save_suggestion(date_str, title, description, activities):
     conn = _get_conn()
     conn.execute("INSERT INTO suggestions (date, title, description, activities) VALUES (?,?,?,?)", (date_str, title, description, json.dumps(activities, ensure_ascii=False)))

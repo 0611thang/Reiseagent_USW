@@ -22,6 +22,7 @@ from agents.suggestion_agent import create_replacement_suggestion, create_sugges
 from providers.places import get_places
 from providers.weather import get_weather_for_trip
 from providers.navigation import get_route
+from providers.calendar import create_calendar_event
 import profile_store
 
 app = FastAPI(title="Reiseplanungs-Agent API", version="1.0.0")
@@ -332,8 +333,24 @@ def get_pending_suggestions():
 
 @app.post("/api/suggestions/{suggestion_id}/accept")
 def accept_suggestion(suggestion_id: int):
+    suggestion = profile_store.get_suggestion(suggestion_id)
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="Vorschlag nicht gefunden.")
+
     profile_store.update_suggestion_status(suggestion_id, "accepted")
-    return {"status": "accepted"}
+
+    activities = suggestion.get("activities", [])
+    description = suggestion.get("description") or "Angenommener Vorschlag aus dem Reiseagenten."
+    if activities:
+        description += "\n\nAktivitaeten:\n" + "\n".join(f"- {a}" for a in activities)
+
+    calendar_result = create_calendar_event(
+        title=suggestion["title"],
+        description=description,
+        date_str=suggestion["date"],
+    )
+
+    return {"status": "accepted", "calendar": calendar_result}
 
 @app.post("/api/suggestions/{suggestion_id}/reject")
 def reject_suggestion(suggestion_id: int, home_city: str = "Berlin"):
