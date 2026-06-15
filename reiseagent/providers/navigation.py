@@ -27,3 +27,10 @@ def get_route(from_lat, from_lng, to_lat, to_lng, mode="foot-walking"):
         }
     except Exception:
         return None
+
+
+def get_both_routes(from_lat, from_lng, to_lat, to_lng):
+    """Berechnet Fußweg und Autoroute parallel."""
+    foot = get_route(from_lat, from_lng, to_lat, to_lng, mode="foot-walking")
+    car = get_route(from_lat, from_lng, to_lat, to_lng, mode="driving-car")
+    return {"foot": foot, "car": car}

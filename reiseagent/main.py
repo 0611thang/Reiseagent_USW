@@ -1,10 +1,13 @@
 import sys
 import os
+import time
+import threading
 sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
 load_dotenv()
 
+from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -18,7 +21,8 @@ from agents.free_time_detector import detect_and_save_free_days
 from agents.suggestion_agent import create_suggestions_for_upcoming_free_days
 from providers.places import get_places
 from providers.weather import get_weather_for_trip
-from providers.navigation import get_route
+from providers.navigation import get_route, get_both_routes
+from providers.telegram import send_navigation_reminder
 import profile_store
 
 app = FastAPI(title="Reiseplanungs-Agent API", version="1.0.0")
@@ -295,6 +299,67 @@ def accept_suggestion(suggestion_id: int):
 def reject_suggestion(suggestion_id: int):
     profile_store.update_suggestion_status(suggestion_id, "rejected")
     return {"status": "rejected"}
+
+
+def _navigation_reminder_loop():
+    """Läuft im Hintergrund, prüft jede Minute ob eine Erinnerung gesendet werden soll."""
+    sent_reminders = set()
+
+    while True:
+        try:
+            now = datetime.now()
+            current_time = now.strftime("%H:%M")
+
+            for trip in store.trips.values():
+                plan = trip.get("active_plan")
+                if not plan:
+                    continue
+
+                for day in plan.get("days", []):
+                    slots = day.get("time_slots", [])
+                    for i, slot in enumerate(slots):
+                        activity = slot["activity"]
+                        activity_id = activity["id"]
+                        start_time = slot["start_time"]
+
+                        loc = activity.get("location", {})
+                        lat = loc.get("lat")
+                        lng = loc.get("lng")
+
+                        routes = {"foot": None, "car": None}
+                        if i > 0 and lat and lng:
+                            prev_loc = slots[i - 1]["activity"].get("location", {})
+                            prev_lat = prev_loc.get("lat")
+                            prev_lng = prev_loc.get("lng")
+                            if prev_lat and prev_lng:
+                                routes = get_both_routes(prev_lat, prev_lng, lat, lng)
+
+                        foot = routes.get("foot")
+                        minutes_buffer = (foot["duration_minutes"] + 15) if foot else 30
+
+                        h, m = map(int, start_time.split(":"))
+                        total_minutes = h * 60 + m - minutes_buffer
+                        send_hour = total_minutes // 60
+                        send_minute = total_minutes % 60
+                        send_time = f"{send_hour:02d}:{send_minute:02d}"
+
+                        reminder_key = f"{trip['id']}_{activity_id}_{now.date()}"
+
+                        if current_time == send_time and reminder_key not in sent_reminders:
+                            send_navigation_reminder(activity["name"], start_time, routes)
+                            sent_reminders.add(reminder_key)
+
+        except Exception as e:
+            print(f"[navigation_reminder] Fehler: {e}")
+
+        time.sleep(60)
+
+
+@app.on_event("startup")
+async def startup():
+    nav_thread = threading.Thread(target=_navigation_reminder_loop, daemon=True)
+    nav_thread.start()
+    print("[navigation_reminder] Automatische Erinnerungen gestartet.")
 
 
 if __name__ == "__main__":

@@ -711,6 +711,51 @@ def main():
     with col_budget:
         render_right_col(active_plan)
 
+    # ── Navigation & Telegram ────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🗺️ Navigation & Telegram-Erinnerungen")
+    st.caption("Routen zwischen Aktivitäten berechnen und Erinnerungen an die Gruppe schicken.")
+
+    for day in active_plan.get("days", []):
+        slots = day.get("time_slots", [])
+        if not slots:
+            continue
+        with st.expander(f"Tag {day['day_number']} – {day['title']}"):
+            for i, slot in enumerate(slots):
+                activity = slot["activity"]
+                loc = activity.get("location", {})
+                lat = loc.get("lat")
+                lng = loc.get("lng")
+
+                route = None
+                if i > 0 and lat and lng:
+                    prev_loc = slots[i - 1]["activity"].get("location", {})
+                    prev_lat = prev_loc.get("lat")
+                    prev_lng = prev_loc.get("lng")
+                    if prev_lat and prev_lng:
+                        from providers.navigation import get_route
+                        route = get_route(prev_lat, prev_lng, lat, lng)
+
+                col_info, col_btn = st.columns([3, 1])
+                with col_info:
+                    if route:
+                        st.markdown(
+                            f"**{slot['start_time']} – {activity['name']}**  \n"
+                            f"↑ {route['duration_minutes']} Min zu Fuß · {route['distance_km']} km"
+                        )
+                    else:
+                        st.markdown(f"**{slot['start_time']} – {activity['name']}**")
+
+                with col_btn:
+                    btn_key = f"notify_{day['day_number']}_{i}"
+                    if st.button("📬 Senden", key=btn_key):
+                        from providers.telegram import send_navigation_reminder
+                        ok = send_navigation_reminder(activity["name"], slot["start_time"], route)
+                        if ok:
+                            st.success("Gesendet!")
+                        else:
+                            st.error("Fehler beim Senden.")
+
     # ── Profile & Suggestions ────────────────────────────────────────────────
     st.markdown("---")
     show_profile_and_suggestions()
