@@ -26,6 +26,48 @@ BAD_NAME_WORDS = [
     "street",
     "road",
     "avenue",
+    "parking",
+    "parkplatz",
+    "apartment",
+    "apartments",
+    "office",
+    "offices",
+    "büro",
+    "buro",
+    "building",
+    "house no",
+    "wohnhaus",
+    "schule",
+    "lieferhaus",
+    "denkmal",
+    "mahn",
+    "gedenk",
+    "brunnen",
+    "statue",
+    "sculpture",
+    "skulptur",
+    "friedhof",
+    "cemetery",
+    "ehemalige",
+]
+
+BAD_KIND_WORDS = [
+    "accomodations",
+    "accommodations",
+    "other_hotels",
+    "hotels",
+    "apartments",
+    "banks",
+    "offices",
+    "parking",
+    "car_parkings",
+    "industrial_facilities",
+    "commemorative_plaques",
+    "monuments_and_memorials",
+    "fountains",
+    "sculptures",
+    "burial_places",
+    "cemeteries",
 ]
 
 IMPORTANT_NAME_WORDS = [
@@ -38,6 +80,7 @@ IMPORTANT_NAME_WORDS = [
     "montmartre",
     "sainte-chapelle",
     "pantheon",
+    "trevi",
     "versailles",
     "sagrada",
     "guell",
@@ -51,6 +94,7 @@ IMPORTANT_NAME_WORDS = [
     "statue of liberty",
     "central park",
     "marienplatz",
+    "rathaus",
     "nymphenburg",
     "englischer garten",
     "deutsches museum",
@@ -299,10 +343,10 @@ GENERIC_ACTIVITIES = [
 def _normalize_text(text: str) -> str:
     return (
         text.lower()
-        .replace("?", "ae")
-        .replace("?", "oe")
-        .replace("?", "ue")
-        .replace("?", "ss")
+        .replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
         .replace("\u00c3\u00a4", "ae")
         .replace("\u00c3\u00b6", "oe")
         .replace("\u00c3\u00bc", "ue")
@@ -319,7 +363,7 @@ def _fetch_from_opentripmap(destination: str, interests: list) -> list:
 
     coords = get_coordinates(destination)
     if not coords:
-        LAST_PLACES_STATUS = f"OpenTripMap nicht genutzt: keine Koordinaten für {destination}."
+        LAST_PLACES_STATUS = f"OpenTripMap nicht genutzt: keine Koordinaten fuer {destination}."
         return []
 
     try:
@@ -327,57 +371,41 @@ def _fetch_from_opentripmap(destination: str, interests: list) -> list:
         raw_activities = []
         errors = []
 
-        for kinds in _build_opentripmap_kinds(interests):
-            params = {
-                "radius": 12000,
-                "lon": coords["lng"],
-                "lat": coords["lat"],
-                "kinds": kinds,
-                "limit": 20,
-                "format": "json",
-                "apikey": api_key,
-            }
-            response = httpx.get(url, params=params, timeout=8.0)
-            if response.status_code != 200:
-                errors.append(f"{kinds}:{response.status_code}")
-                continue
-
-            places = response.json()
-            if not isinstance(places, list):
-                errors.append(f"{kinds}:invalid_response")
-                continue
-
-            for place in places:
-                name = _get_place_name(place)
-                if not name or _is_bad_place_name(name):
+        for radius in [8000, 15000, 25000]:
+            for kinds in _build_opentripmap_kinds(interests):
+                params = {
+                    "radius": radius,
+                    "lon": coords["lng"],
+                    "lat": coords["lat"],
+                    "kinds": kinds,
+                    "limit": 25,
+                    "format": "json",
+                    "rate": 2,
+                    "apikey": api_key,
+                }
+                response = httpx.get(url, params=params, timeout=8.0)
+                if response.status_code != 200:
+                    errors.append(f"{kinds}:{response.status_code}")
                     continue
 
-                kinds_text = _get_place_kinds(place)
-                category = _map_kind(kinds_text)
-                lat, lng = _get_place_coordinates(place)
-                quality_score = _quality_score(place, name, kinds_text)
+                places = response.json()
+                if not isinstance(places, list):
+                    errors.append(f"{kinds}:invalid_response")
+                    continue
 
-                raw_activities.append({
-                    "id": f"otm-{place.get('xid') or place.get('id') or name}",
-                    "name": name,
-                    "category": category,
-                    "description": f"{name} in {destination}.",
-                    "location": {
-                        "name": name,
-                        "area": destination,
-                        "lat": lat,
-                        "lng": lng,
-                    },
-                    "estimated_cost_per_person": _estimate_cost(category),
-                    "duration_minutes": 90,
-                    "indoor_outdoor": _guess_indoor_outdoor(kinds_text),
-                    "tags": _extract_tags(kinds_text, interests),
-                    "quality_score": quality_score,
-                    "reasoning": f"Empfehlung via OpenTripMap für {destination}.",
-                    "source": "opentripmap",
-                })
+                for place in places:
+                    activity = _place_to_activity(place, destination, interests)
+                    if activity:
+                        raw_activities.append(activity)
 
-        activities = _rank_and_deduplicate(raw_activities)
+            if len(_rank_and_deduplicate(raw_activities)) >= 18:
+                break
+
+        activities = [
+            activity
+            for activity in _rank_and_deduplicate(raw_activities)
+            if activity.get("quality_score", 0) >= 35
+        ]
 
         if activities:
             LAST_PLACES_STATUS = f"OpenTripMap hat {len(activities)} gute Orte geliefert."
@@ -401,6 +429,8 @@ def _build_opentripmap_kinds(interests: list) -> list:
         "architecture",
         "historic",
         "museums",
+        "tourist_facilities",
+        "view_points",
     ]
 
     interest_to_kinds = {
@@ -419,6 +449,37 @@ def _build_opentripmap_kinds(interests: list) -> list:
                 kinds.append(kind)
 
     return kinds[:8]
+
+
+def _place_to_activity(place: dict, destination: str, interests: list) -> dict | None:
+    name = _get_place_name(place).strip()
+    kinds_text = _get_place_kinds(place)
+    if not name or _is_bad_place(place, name, kinds_text):
+        return None
+
+    category = _map_kind(kinds_text)
+    lat, lng = _get_place_coordinates(place)
+    quality_score = _quality_score(place, name, kinds_text)
+
+    return {
+        "id": f"otm-{place.get('xid') or place.get('id') or name}",
+        "name": name,
+        "category": category,
+        "description": f"{name} in {destination}.",
+        "location": {
+            "name": name,
+            "area": destination,
+            "lat": lat,
+            "lng": lng,
+        },
+        "estimated_cost_per_person": _estimate_cost(category),
+        "duration_minutes": 90,
+        "indoor_outdoor": _guess_indoor_outdoor(kinds_text),
+        "tags": _extract_tags(kinds_text, interests),
+        "quality_score": quality_score,
+        "reasoning": f"Empfehlung via OpenTripMap fuer {destination}.",
+        "source": "opentripmap",
+    }
 
 
 def _get_place_name(place: dict) -> str:
@@ -455,31 +516,60 @@ def _is_bad_place_name(name: str) -> bool:
     return any(word in normalized for word in BAD_NAME_WORDS)
 
 
+def _is_bad_place(place: dict, name: str, kinds_text: str) -> bool:
+    normalized_kinds = _normalize_text(kinds_text)
+    if _is_bad_place_name(name):
+        return True
+    if any(word in normalized_kinds for word in BAD_KIND_WORDS):
+        return True
+    return False
+
+
 def _quality_score(place: dict, name: str, kinds_str: str) -> int:
     normalized_name = _normalize_text(name)
-    score = 30
+    normalized_kinds = _normalize_text(kinds_str)
+    score = 5
 
     if any(word in normalized_name for word in IMPORTANT_NAME_WORDS):
-        score += 50
+        score += 60
 
-    if "museums" in kinds_str or "museum" in kinds_str:
-        score += 25
-    if "architecture" in kinds_str or "historic_architecture" in kinds_str:
-        score += 20
-    if "interesting_places" in kinds_str:
-        score += 15
-    if "cultural" in kinds_str or "historic" in kinds_str:
+    if place.get("wikipedia"):
         score += 10
-    if "foods" in kinds_str or "restaurants" in kinds_str:
+    if place.get("wikidata"):
+        score += 6
+
+    rate = place.get("rate", 0)
+    if isinstance(rate, str) and rate.isdigit():
+        rate = int(rate)
+    if isinstance(rate, (int, float)):
+        score += min(int(rate), 7) * 4
+
+    if "museums" in normalized_kinds or "museum" in normalized_kinds:
+        score += 16
+    if "historic" in normalized_kinds:
+        score += 12
+    if "architecture" in normalized_kinds or "historic_architecture" in normalized_kinds:
+        score += 10
+    if "cultural" in normalized_kinds or "culture" in normalized_kinds:
         score += 8
-    if "natural" in kinds_str or "parks" in kinds_str:
+    if (
+        "view_point" in normalized_kinds
+        or "view_points" in normalized_kinds
+        or "viewpoints" in normalized_kinds
+    ):
+        score += 10
+    if "interesting_places" in normalized_kinds:
+        score += 6
+    if "foods" in normalized_kinds or "restaurants" in normalized_kinds:
+        score += 8
+    if "shops" in normalized_kinds:
+        score += 8
+    if "natural" in normalized_kinds or "parks" in normalized_kinds:
         score += 5
 
-    rate = place.get("rate")
-    if isinstance(rate, (int, float)):
-        score += int(rate) * 5
-
     if any(word in normalized_name for word in BAD_NAME_WORDS):
+        score -= 80
+    if any(word in normalized_kinds for word in BAD_KIND_WORDS):
         score -= 80
 
     return max(0, min(score, 100))
@@ -489,6 +579,8 @@ def _rank_and_deduplicate(activities: list) -> list:
     best_by_name = {}
 
     for activity in activities:
+        activity = activity.copy()
+        activity["category"] = _normalize_category(activity.get("category", "sightseeing"))
         key = _normalize_text(activity["name"]).strip()
         current = best_by_name.get(key)
         if not current or activity.get("quality_score", 0) > current.get("quality_score", 0):
@@ -528,6 +620,7 @@ def _get_city_highlight_activities(destination: str) -> list:
     activities = []
     for index, item in enumerate(highlights):
         name, category, lat, lng = item
+        category = _normalize_category(category)
         activities.append({
             "id": f"highlight-{city_key}-{index}",
             "name": name,
@@ -541,7 +634,7 @@ def _get_city_highlight_activities(destination: str) -> list:
             },
             "estimated_cost_per_person": _estimate_cost(category),
             "duration_minutes": 90,
-            "indoor_outdoor": "indoor" if category == "museum" else "mixed",
+            "indoor_outdoor": "indoor" if category in ["culture", "food"] else "mixed",
             "tags": _tags_for_category(category),
             "quality_score": 100,
             "reasoning": f"Bekanntes Stadt-Highlight für {destination}.",
@@ -551,12 +644,23 @@ def _get_city_highlight_activities(destination: str) -> list:
     return activities
 
 
-def _tags_for_category(category: str) -> list:
+def _normalize_category(category: str) -> str:
     if category == "museum":
-        return ["museen", "geschichte", "sehenswuerdigkeiten", "rain_safe"]
+        return "culture"
     if category == "restaurant":
-        return ["gutes essen", "rain_safe"]
+        return "food"
     if category == "walk":
+        return "nature"
+    return category
+
+
+def _tags_for_category(category: str) -> list:
+    category = _normalize_category(category)
+    if category == "culture":
+        return ["museen", "geschichte", "sehenswuerdigkeiten", "rain_safe"]
+    if category == "food":
+        return ["gutes essen", "rain_safe"]
+    if category == "nature":
         return ["spaziergaenge", "natur", "sehenswuerdigkeiten"]
     if category == "shopping":
         return ["shopping", "sehenswuerdigkeiten"]
@@ -564,40 +668,48 @@ def _tags_for_category(category: str) -> list:
 
 
 def _map_kind(kinds_str: str) -> str:
-    if "museum" in kinds_str:
-        return "museum"
-    if "food" in kinds_str or "restaurant" in kinds_str:
-        return "restaurant"
-    if "natural" in kinds_str or "park" in kinds_str:
-        return "walk"
+    kinds = _normalize_text(kinds_str)
+    if "food" in kinds or "restaurant" in kinds:
+        return "food"
+    if "shop" in kinds:
+        return "shopping"
+    if "natural" in kinds or "park" in kinds:
+        return "nature"
+    if "museum" in kinds or "cultural" in kinds or "historic" in kinds or "architecture" in kinds:
+        return "culture"
     return "sightseeing"
 
 
 def _estimate_cost(category: str) -> float:
-    if category == "restaurant":
+    category = _normalize_category(category)
+    if category == "food":
         return 20.0
-    if category == "museum":
+    if category == "culture":
         return 12.0
     return 0.0
 
 
 def _guess_indoor_outdoor(kinds_str: str) -> str:
-    if "museum" in kinds_str or "food" in kinds_str or "restaurant" in kinds_str:
+    kinds = _normalize_text(kinds_str)
+    if "museum" in kinds or "food" in kinds or "restaurant" in kinds:
         return "indoor"
-    if "natural" in kinds_str or "park" in kinds_str:
+    if "natural" in kinds or "park" in kinds:
         return "outdoor"
     return "mixed"
 
 
 def _extract_tags(kinds_str: str, interests: list) -> list:
     tags = []
-    if "museum" in kinds_str:
+    kinds = _normalize_text(kinds_str)
+    if "museum" in kinds or "cultural" in kinds:
         tags += ["museen", "rain_safe"]
-    if "natural" in kinds_str or "park" in kinds_str:
+    if "natural" in kinds or "park" in kinds:
         tags += ["spaziergaenge", "natur"]
-    if "food" in kinds_str or "restaurant" in kinds_str:
+    if "food" in kinds or "restaurant" in kinds:
         tags += ["gutes essen", "rain_safe"]
-    if "historic" in kinds_str or "architecture" in kinds_str:
+    if "shop" in kinds:
+        tags += ["shopping"]
+    if "historic" in kinds or "architecture" in kinds or "view_point" in kinds:
         tags += ["sehenswuerdigkeiten", "geschichte"]
     return list(set(tags))
 
@@ -607,22 +719,22 @@ def get_places(destination: str, interests: list) -> list:
 
     city_highlights = _get_city_highlight_activities(destination)
 
-    if destination.lower() == "berlin":
-        LAST_PLACES_STATUS = "Berlin Demo-Daten und Stadt-Highlights verwendet."
-        return _rank_and_deduplicate(city_highlights + BERLIN_ACTIVITIES)
-
     api_results = _fetch_from_opentripmap(destination, interests)
 
-    if len(api_results) >= 12:
+    if len(api_results) >= 12 and not city_highlights:
         return api_results
 
-    combined_results = _rank_and_deduplicate(api_results + city_highlights)
+    fallback_results = city_highlights
+    if _get_city_key(destination) == "berlin" and len(api_results) < 8:
+        fallback_results = city_highlights + BERLIN_ACTIVITIES
+
+    combined_results = _rank_and_deduplicate(api_results + fallback_results)
     if combined_results:
-        if city_highlights and api_results:
+        if fallback_results and api_results:
             LAST_PLACES_STATUS = f"{LAST_PLACES_STATUS} Mit Stadt-Highlights aufgefuellt."
-        elif city_highlights:
+        elif fallback_results:
             LAST_PLACES_STATUS = f"{LAST_PLACES_STATUS} Fallback: Stadt-Highlights verwendet."
         return combined_results
 
     LAST_PLACES_STATUS = f"{LAST_PLACES_STATUS} Fallback: generische Aktivitäten verwendet."
-    return GENERIC_ACTIVITIES
+    return _rank_and_deduplicate(GENERIC_ACTIVITIES)
