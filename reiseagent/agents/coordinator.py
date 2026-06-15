@@ -97,13 +97,18 @@ def _try_apply_plan_change(trip: dict, message: str) -> dict | None:
         "hinzufuegen", "hinzufugen", "fuege", "fuge", "einsetzen", "setze",
         "ersetze", "austauschen", "tausch", "fuelle", "fulle", "vervollstaendige",
         "vervollstandige", "plan auffuellen", "plan auffullen", "vorschlag",
+        "vorschlaege", "alternative", "alternativen", "anders", "woanders",
+        "empfehlung", "empfehlungen", "was ist", "was kann ich",
         "nehme", "nehmen", "nimm", "loesche", "losche", "entferne", "entfernen",
-        "verschiebe", "uhr", "uhrzeit", "shuffle", "mische", "neu",
+        "verschiebe", "uhrzeit", "shuffle", "mische", "neu",
     ]
     if not any(word in text for word in change_words):
         return None
 
-    if any(word in text for word in ["verschiebe", "uhr", "uhrzeit"]):
+    if _is_suggestion_request(text) and not _is_clear_replace_request(text):
+        return _suggest_alternatives_from_chat(trip, message)
+
+    if _is_clear_time_change_request(text):
         return _change_time_from_chat(trip, message)
 
     if any(word in text for word in ["loesche", "losche", "entferne", "entfernen"]):
@@ -133,6 +138,58 @@ def _plain_text(text: str) -> str:
         .replace("Ã¤", "ae")
         .replace("Ã¶", "oe")
     )
+
+
+def _is_suggestion_request(text: str) -> bool:
+    suggestion_words = [
+        "vorschlag",
+        "vorschlaege",
+        "alternative",
+        "alternativen",
+        "anders",
+        "woanders",
+        "empfehlung",
+        "empfehlungen",
+        "was ist",
+        "was kann ich",
+    ]
+    return any(word in text for word in suggestion_words)
+
+
+def _is_clear_replace_request(text: str) -> bool:
+    replace_words = [
+        "ersetze",
+        "austauschen",
+        "tausch",
+        "nimm",
+        "nehme",
+        "nehmen",
+        "uebernehme",
+        "ubernehme",
+    ]
+    return any(word in text for word in replace_words)
+
+
+def _is_clear_time_change_request(text: str) -> bool:
+    if "verschiebe" in text:
+        return True
+    if "uhrzeit" in text and ("aendere" in text or "andere" in text):
+        return True
+    if "setze" in text and _extract_requested_time(text):
+        return True
+    if "plane" in text and re.search(r"von\s+\d{1,2}(?::\d{2})?\s*(?:uhr)?\s+bis\s+\d{1,2}", text):
+        return True
+    return False
+
+
+def _extract_requested_time(message: str) -> str | None:
+    text = _plain_text(message)
+    match = re.search(r"(?:um|gegen|auf)\s+(\d{1,2})(?::(\d{2}))?\s*(?:uhr)?", text)
+    if not match:
+        match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*uhr", text)
+    if not match:
+        return None
+    return _format_time(match.group(1), match.group(2))
 
 
 def _get_day_number(message: str, fallback: int = 1) -> int:
@@ -173,28 +230,102 @@ def _available_activities(trip: dict) -> list:
     return [a for a in activities if a["name"].lower() not in used_names]
 
 
+def _suggest_alternatives_from_chat(trip: dict, message: str) -> dict:
+    active_plan = trip.get("active_plan")
+    if not active_plan:
+        return _chat_change_reply("Kein aktiver Plan gefunden.", False)
+
+    day_number = _get_day_number(message)
+    day = _find_day(active_plan, day_number)
+    if not day:
+        return _chat_change_reply(f"Ich konnte Tag {day_number} im Plan nicht finden.", False)
+
+    wanted_time = _extract_requested_time(message)
+    category = _category_from_text(message)
+    if not category and wanted_time:
+        slot = _find_slot_near_time(day, wanted_time)
+        if slot:
+            category = slot["activity"].get("category")
+
+    activities = _available_activities(trip)
+    if category:
+        activities = [activity for activity in activities if _activity_matches_category(activity, category)]
+
+    suggestions = activities[:5]
+    if not suggestions:
+        return _chat_change_reply("Ich habe gerade keine passenden Alternativen gefunden.", False)
+
+    time_text = f" um {wanted_time}" if wanted_time else ""
+    lines = []
+    for index, activity in enumerate(suggestions, start=1):
+        category_text = activity.get("category", "Aktivitaet")
+        lines.append(f"{index}. {activity['name']} ({category_text})")
+
+    reply = (
+        f"Ich habe diese Alternativen fuer Tag {day_number}{time_text} gefunden:\n"
+        + "\n".join(lines)
+        + "\n\nWenn du eine davon uebernehmen moechtest, sag z. B.: nimm Vorschlag 2."
+    )
+
+    return {
+        "message": reply,
+        "agent_insights": [{
+            "agent_name": "chat_planning_agent",
+            "display_label": "Chat Planungs Agent",
+            "status": "completed",
+            "summary": "Alternativen vorgeschlagen, Plan nicht geaendert.",
+        }],
+    }
+
+
+def _find_slot_near_time(day: dict, wanted_time: str) -> dict | None:
+    wanted_minutes = _time_to_minutes(wanted_time)
+    best_slot = None
+    best_distance = None
+
+    for slot in day.get("time_slots", []):
+        start = _time_to_minutes(slot.get("start_time", "00:00"))
+        distance = abs(start - wanted_minutes)
+        if best_distance is None or distance < best_distance:
+            best_slot = slot
+            best_distance = distance
+
+    return best_slot
+
+
 def _category_from_text(message: str) -> str | None:
     text = _plain_text(message)
     if "shopping" in text or "laden" in text or "markt" in text:
         return "shopping"
     if "restaurant" in text or "essen" in text:
-        return "restaurant"
+        return "food"
     if "museum" in text or "museen" in text:
-        return "museum"
+        return "culture"
     if "spaziergang" in text or "park" in text or "natur" in text:
-        return "walk"
+        return "nature"
     if "sehenswuerdigkeit" in text or "sightseeing" in text:
         return "sightseeing"
     return None
 
 
 def _activity_matches_category(activity: dict, category: str) -> bool:
-    if activity.get("category") == category:
+    aliases = {
+        "food": ["food", "restaurant"],
+        "restaurant": ["food", "restaurant"],
+        "culture": ["culture", "museum"],
+        "museum": ["culture", "museum"],
+        "nature": ["nature", "walk"],
+        "walk": ["nature", "walk"],
+        "shopping": ["shopping"],
+        "sightseeing": ["sightseeing"],
+    }
+    allowed_categories = aliases.get(category, [category])
+    if activity.get("category") in allowed_categories:
         return True
-    if category in ["restaurant", "museum"]:
+    if category in ["restaurant", "museum", "food", "culture"]:
         return False
     tags = [_plain_text(t) for t in activity.get("tags", [])]
-    if category == "walk":
+    if category in ["walk", "nature"]:
         return "spaziergaenge" in tags or "natur" in tags
     return category in tags
 
@@ -330,9 +461,12 @@ def _extract_last_assistant_suggestions(trip: dict) -> list[str]:
 def _generic_name_for_category(category: str) -> str:
     names = {
         "restaurant": "Anderes Restaurant",
+        "food": "Anderes Restaurant",
         "museum": "Anderes Museum",
+        "culture": "Anderes Museum",
         "shopping": "Shopping-Alternative",
         "walk": "Alternativer Spaziergang",
+        "nature": "Alternativer Spaziergang",
         "sightseeing": "Alternative Sehenswuerdigkeit",
     }
     return names.get(category, "Alternative Aktivitaet")
@@ -395,14 +529,20 @@ def _custom_activity(trip: dict, name: str, category: str = "activity") -> dict:
     cost = 0.0
     indoor_outdoor = "mixed"
     tags = ["chat", "nutzerwunsch"]
-    if category == "restaurant":
+    if category in ["restaurant", "food"]:
         cost = 20.0
         indoor_outdoor = "indoor"
         tags += ["gutes essen", "restaurant"]
-    elif category == "museum":
+        category = "food"
+    elif category in ["museum", "culture"]:
         cost = 12.0
         indoor_outdoor = "indoor"
         tags += ["museen", "rain_safe"]
+        category = "culture"
+    elif category in ["walk", "nature"]:
+        indoor_outdoor = "outdoor"
+        tags += ["spaziergaenge", "natur"]
+        category = "nature"
 
     return {
         "id": f"chat-{uuid.uuid4()}",
