@@ -1,5 +1,6 @@
 import sys
 import os
+from datetime import datetime
 sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
@@ -201,6 +202,18 @@ def _status_pill(status: str) -> str:
 
 # ─────────────────────────── session / data ──────────────────────────────────
 
+def _format_day_label(day: dict) -> str:
+    date_text = day.get("date", "")
+    if date_text:
+        try:
+            date_text = datetime.fromisoformat(date_text).strftime("%d.%m.%Y")
+        except ValueError:
+            pass
+    if date_text:
+        return f"Tag {day.get('day_number')} – {date_text}"
+    return f"Tag {day.get('day_number')}"
+
+
 def init_session():
     if "trip_id" not in st.session_state:
         st.session_state.trip_id = None
@@ -350,7 +363,7 @@ def render_middle_col(plan: dict):
 
         content_html += f"""
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0;margin-bottom:10px;margin-top:6px;">
-            <div style="font-size:14px;font-weight:700;color:#111;">Tag {day['day_number']} – {_esc(day.get('title', ''))}</div>
+            <div style="font-size:14px;font-weight:700;color:#111;">{_esc(_format_day_label(day))} – {_esc(day.get('title', ''))}</div>
             <div style="font-size:12px;color:#6b7280;">{w_str}</div>
         </div>"""
 
@@ -740,7 +753,7 @@ def main():
         slots = day.get("time_slots", [])
         if not slots:
             continue
-        with st.expander(f"Tag {day['day_number']} – {day['title']}"):
+        with st.expander(f"{_format_day_label(day)} – {day['title']}"):
             for i, slot in enumerate(slots):
                 activity = slot["activity"]
                 loc = activity.get("location", {})
