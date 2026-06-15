@@ -292,9 +292,18 @@ def render_left_col(trip: dict):
         user_input = st.text_input("", placeholder="Nachricht eingeben...", label_visibility="collapsed")
         sent = st.form_submit_button("Senden", use_container_width=True, type="primary")
         if sent and user_input.strip() and active_plan:
-            st.session_state.chat_messages.append({"role": "user", "content": user_input.strip()})
+            user_message = {"role": "user", "content": user_input.strip()}
+            st.session_state.chat_messages.append(user_message)
+            trip["chat_messages"] = list(st.session_state.chat_messages)
             result = coordinator.handle_chat_message(trip, user_input.strip())
-            st.session_state.chat_messages.append({"role": "assistant", "content": result["message"]})
+            assistant_message = {"role": "assistant", "content": result["message"]}
+            st.session_state.chat_messages.append(assistant_message)
+            trip["chat_messages"] = list(st.session_state.chat_messages)
+            store.update_trip(trip["id"], {
+                "chat_messages": trip["chat_messages"],
+                "active_plan": trip.get("active_plan"),
+                "agent_insights": trip.get("agent_insights", []),
+            })
             st.rerun()
 
     # Agent Insights
@@ -597,14 +606,25 @@ def show_profile_and_suggestions():
             with sa:
                 if st.button("Annehmen", key=f"sugg_accept_{s['id']}", use_container_width=True):
                     try:
-                        http.post(f"http://localhost:8000/api/suggestions/{s['id']}/accept", timeout=5)
-                    except Exception:
-                        pass
+                        response = http.post(f"http://localhost:8000/api/suggestions/{s['id']}/accept", timeout=20)
+                        data = response.json()
+                        calendar = data.get("calendar", {})
+                        if calendar.get("created"):
+                            st.success("Vorschlag angenommen und im Google Kalender eingetragen.")
+                        else:
+                            reason = calendar.get("reason", "unbekannt")
+                            st.warning(f"Vorschlag angenommen, aber Kalender konnte nicht aktualisiert werden: {reason}")
+                    except Exception as e:
+                        st.error(f"Annehmen fehlgeschlagen: {e}")
                     st.rerun()
             with sb:
                 if st.button("Ablehnen", key=f"sugg_reject_{s['id']}", use_container_width=True):
                     try:
-                        http.post(f"http://localhost:8000/api/suggestions/{s['id']}/reject", timeout=5)
+                        http.post(
+                            f"http://localhost:8000/api/suggestions/{s['id']}/reject",
+                            params={"home_city": home_city},
+                            timeout=5,
+                        )
                     except Exception:
                         pass
                     st.rerun()
@@ -727,21 +747,22 @@ def main():
                 lat = loc.get("lat")
                 lng = loc.get("lng")
 
-                route = None
+                routes = {"foot": None, "car": None}
                 if i > 0 and lat and lng:
                     prev_loc = slots[i - 1]["activity"].get("location", {})
                     prev_lat = prev_loc.get("lat")
                     prev_lng = prev_loc.get("lng")
                     if prev_lat and prev_lng:
-                        from providers.navigation import get_route
-                        route = get_route(prev_lat, prev_lng, lat, lng)
+                        from providers.navigation import get_both_routes
+                        routes = get_both_routes(prev_lat, prev_lng, lat, lng)
 
+                foot = routes.get("foot")
                 col_info, col_btn = st.columns([3, 1])
                 with col_info:
-                    if route:
+                    if foot:
                         st.markdown(
                             f"**{slot['start_time']} – {activity['name']}**  \n"
-                            f"↑ {route['duration_minutes']} Min zu Fuß · {route['distance_km']} km"
+                            f"👟 {foot['duration_minutes']} Min zu Fuß · {foot['distance_km']} km"
                         )
                     else:
                         st.markdown(f"**{slot['start_time']} – {activity['name']}**")
@@ -750,7 +771,7 @@ def main():
                     btn_key = f"notify_{day['day_number']}_{i}"
                     if st.button("📬 Senden", key=btn_key):
                         from providers.telegram import send_navigation_reminder
-                        ok = send_navigation_reminder(activity["name"], slot["start_time"], route)
+                        ok = send_navigation_reminder(activity["name"], slot["start_time"], routes)
                         if ok:
                             st.success("Gesendet!")
                         else:

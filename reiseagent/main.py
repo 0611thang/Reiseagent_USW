@@ -1,7 +1,8 @@
+from typing import Optional
+import threading
+import time
 import sys
 import os
-import time
-import threading
 sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
@@ -13,16 +14,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import store
-from agents import coordinator, replanning, budget
+from agents import coordinator, replanning, budget, monitoring
 from agents.navigation import create_navigation_reminder
 from agents.daily_brief import create_daily_brief
 from agents.profile_learner import run_profile_update
 from agents.free_time_detector import detect_and_save_free_days
-from agents.suggestion_agent import create_suggestions_for_upcoming_free_days
+from agents.suggestion_agent import create_replacement_suggestion, create_suggestions_for_upcoming_free_days
 from providers.places import get_places
 from providers.weather import get_weather_for_trip
 from providers.navigation import get_route, get_both_routes
 from providers.telegram import send_navigation_reminder
+from providers.calendar import create_calendar_event
 import profile_store
 
 app = FastAPI(title="Reiseplanungs-Agent API", version="1.0.0")
@@ -34,6 +36,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+MONITORING_INTERVAL_SECONDS = int(os.getenv("MONITORING_INTERVAL_SECONDS", "1800"))
+_monitoring_thread_started = False
+
+
+def _monitoring_loop():
+    while True:
+        try:
+            monitoring.monitor_all_active_trips()
+        except Exception as exc:
+            print(f"[monitoring] Fehler im Hintergrundlauf: {exc}")
+
+        time.sleep(MONITORING_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+def start_background_threads():
+    global _monitoring_thread_started
+
+    if not _monitoring_thread_started:
+        _monitoring_thread_started = True
+        thread = threading.Thread(target=_monitoring_loop, daemon=True)
+        thread.start()
+        print(
+            "[monitoring] Hintergrund-Monitoring gestartet: "
+            f"alle {MONITORING_INTERVAL_SECONDS} Sekunden"
+        )
+
+    nav_thread = threading.Thread(target=_navigation_reminder_loop, daemon=True)
+    nav_thread.start()
+    print("[navigation_reminder] Automatische Erinnerungen gestartet.")
+
 
 class TripRequestBody(BaseModel):
     destination: str
@@ -43,6 +76,12 @@ class TripRequestBody(BaseModel):
     number_of_people: int
     travel_type: str
     interests: list[str]
+
+    origin_airport: Optional[str] = None
+    destination_airport: Optional[str] = None
+    departure_date: Optional[str] = None
+    return_date: Optional[str] = None
+    flight_number: Optional[str] = None
 
 
 class ChatBody(BaseModel):
@@ -69,6 +108,10 @@ def _build_trip_response(trip: dict) -> dict:
         "checklist": trip["checklist"],
         "agent_insights": trip["agent_insights"],
         "chat_messages": trip["chat_messages"],
+        "weather_updates": trip.get("weather_updates", []),
+        "flight_updates": trip.get("flight_updates"),
+        "last_weather_update": trip.get("last_weather_update"),
+        "last_flight_update": trip.get("last_flight_update"),
     }
 
 
@@ -292,13 +335,44 @@ def get_pending_suggestions():
 
 @app.post("/api/suggestions/{suggestion_id}/accept")
 def accept_suggestion(suggestion_id: int):
+    suggestion = profile_store.get_suggestion(suggestion_id)
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="Vorschlag nicht gefunden.")
+
     profile_store.update_suggestion_status(suggestion_id, "accepted")
-    return {"status": "accepted"}
+
+    activities = suggestion.get("activities", [])
+    description = suggestion.get("description") or "Angenommener Vorschlag aus dem Reiseagenten."
+    if activities:
+        description += "\n\nAktivitaeten:\n" + "\n".join(f"- {a}" for a in activities)
+
+    calendar_result = create_calendar_event(
+        title=suggestion["title"],
+        description=description,
+        date_str=suggestion["date"],
+    )
+
+    return {"status": "accepted", "calendar": calendar_result}
 
 @app.post("/api/suggestions/{suggestion_id}/reject")
-def reject_suggestion(suggestion_id: int):
+def reject_suggestion(suggestion_id: int, home_city: str = "Berlin"):
     profile_store.update_suggestion_status(suggestion_id, "rejected")
-    return {"status": "rejected"}
+    replacement = create_replacement_suggestion(suggestion_id, home_city=home_city)
+    return {"status": "rejected", "replacement": replacement}
+
+@app.post("/api/trips/{trip_id}/monitor")
+def run_monitoring_for_trip(trip_id: str):
+    result = monitoring.monitor_trip(trip_id)
+
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    return result
+
+
+@app.post("/api/monitoring/run")
+def run_monitoring_now():
+    return monitoring.monitor_all_active_trips()
 
 
 def _navigation_reminder_loop():
@@ -353,13 +427,6 @@ def _navigation_reminder_loop():
             print(f"[navigation_reminder] Fehler: {e}")
 
         time.sleep(60)
-
-
-@app.on_event("startup")
-async def startup():
-    nav_thread = threading.Thread(target=_navigation_reminder_loop, daemon=True)
-    nav_thread.start()
-    print("[navigation_reminder] Automatische Erinnerungen gestartet.")
 
 
 if __name__ == "__main__":

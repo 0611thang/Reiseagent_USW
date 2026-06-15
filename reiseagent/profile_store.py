@@ -68,11 +68,40 @@ def save_free_day(date_str):
     conn.commit()
     conn.close()
 
+def replace_free_days(date_list):
+    conn = _get_conn()
+    conn.execute("DELETE FROM free_days")
+    for date_str in date_list:
+        conn.execute("INSERT OR IGNORE INTO free_days (date) VALUES (?)", (date_str,))
+    conn.commit()
+    conn.close()
+
 def save_suggestion(date_str, title, description, activities):
     conn = _get_conn()
     conn.execute("INSERT INTO suggestions (date, title, description, activities) VALUES (?,?,?,?)", (date_str, title, description, json.dumps(activities, ensure_ascii=False)))
     conn.commit()
     conn.close()
+
+def get_suggestion(suggestion_id):
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM suggestions WHERE id=?", (suggestion_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    result = dict(row)
+    result["activities"] = json.loads(result["activities"])
+    return result
+
+def get_suggestions_for_date(date_str):
+    conn = _get_conn()
+    rows = conn.execute("SELECT * FROM suggestions WHERE date=? ORDER BY created_at ASC, id ASC", (date_str,)).fetchall()
+    conn.close()
+    results = []
+    for row in rows:
+        result = dict(row)
+        result["activities"] = json.loads(result["activities"])
+        results.append(result)
+    return results
 
 def get_top_interests(limit=10):
     conn = _get_conn()
@@ -109,5 +138,11 @@ def get_pending_suggestions():
 def update_suggestion_status(suggestion_id, status):
     conn = _get_conn()
     conn.execute("UPDATE suggestions SET status=? WHERE id=?", (status, suggestion_id))
+    conn.commit()
+    conn.close()
+
+def update_pending_suggestions_status(status):
+    conn = _get_conn()
+    conn.execute("UPDATE suggestions SET status=? WHERE status='pending'", (status,))
     conn.commit()
     conn.close()

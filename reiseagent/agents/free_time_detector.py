@@ -5,8 +5,8 @@ def detect_and_save_free_days(days_ahead=14):
     profile_store.init_db()
     events = get_calendar_events(days_ahead=days_ahead)
     free = find_free_days(events, days_ahead=days_ahead)
-    for day in free["all_free"]:
-        profile_store.save_free_day(day)
+    profile_store.replace_free_days(free["all_free"])
+    profile_store.update_pending_suggestions_status("replaced")
     return {
         "free_days": free,
         "calendar_events_found": len(events),
