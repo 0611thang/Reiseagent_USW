@@ -6,6 +6,7 @@ from datetime import datetime
 
 from providers.weather import get_weather_for_trip
 import providers.places as places_provider
+from providers.calendar import sync_changed_days_to_calendar
 from agents import planning, budget, checklist, recommendation, replanning
 
 
@@ -470,7 +471,7 @@ def _add_activity_to_day(trip: dict, day: dict, activity: dict):
     })
 
 
-def _refresh_plan_after_change(trip: dict):
+def _refresh_plan_after_change(trip: dict, changed_days: list | None = None) -> dict:
     active_plan = trip["active_plan"]
     active_plan["budget_summary"] = budget.calculate_budget(active_plan["days"], trip["request"])
     active_plan["updated_at"] = datetime.now().isoformat()
@@ -480,6 +481,9 @@ def _refresh_plan_after_change(trip: dict):
         "status": "completed",
         "summary": "Aktiver Plan wurde durch Chat-Befehl angepasst.",
     })
+    if changed_days:
+        return sync_changed_days_to_calendar(changed_days)
+    return {"updated": False, "reason": "no_days"}
 
 
 def _fill_plan_from_chat(trip: dict, message: str) -> dict:
@@ -505,8 +509,8 @@ def _fill_plan_from_chat(trip: dict, message: str) -> dict:
     if not added:
         return _chat_change_reply("Ich habe keine passenden freien Aktivitaeten zum Auffuellen gefunden.", False)
 
-    _refresh_plan_after_change(trip)
-    return _chat_change_reply("Ich habe den Plan aufgefuellt:\n- " + "\n- ".join(added), True)
+    calendar_result = _refresh_plan_after_change(trip, target_days)
+    return _chat_change_reply("Ich habe den Plan aufgefuellt:\n- " + "\n- ".join(added), True, calendar_result)
 
 
 def _delete_activity_from_chat(trip: dict, message: str) -> dict:
@@ -517,8 +521,8 @@ def _delete_activity_from_chat(trip: dict, message: str) -> dict:
 
     old_name = slot["activity"]["name"]
     day["time_slots"].remove(slot)
-    _refresh_plan_after_change(trip)
-    return _chat_change_reply(f"Erledigt: Ich habe '{old_name}' aus Tag {day['day_number']} entfernt.", True)
+    calendar_result = _refresh_plan_after_change(trip, [day])
+    return _chat_change_reply(f"Erledigt: Ich habe '{old_name}' aus Tag {day['day_number']} entfernt.", True, calendar_result)
 
 
 def _change_time_from_chat(trip: dict, message: str) -> dict:
@@ -538,10 +542,11 @@ def _change_time_from_chat(trip: dict, message: str) -> dict:
     slot["start_time"] = new_start
     slot["end_time"] = new_end
     slot["notes"] = "Uhrzeit per Chat geaendert"
-    _refresh_plan_after_change(trip)
+    calendar_result = _refresh_plan_after_change(trip, [day])
     return _chat_change_reply(
         f"Erledigt: Ich habe '{slot['activity']['name']}' von {old_start} auf {new_start} verschoben.",
         True,
+        calendar_result,
     )
 
 
@@ -579,9 +584,9 @@ def _replan_day_or_section_from_chat(trip: dict, message: str) -> dict:
     if not changed:
         return _chat_change_reply("Ich konnte den Tag nicht neu planen.", False)
 
-    _refresh_plan_after_change(trip)
+    calendar_result = _refresh_plan_after_change(trip, [day])
     label = f"Tag {day_number}" if not section else f"{section} an Tag {day_number}"
-    return _chat_change_reply(f"Ich habe {label} neu geplant:\n- " + "\n- ".join(changed), True)
+    return _chat_change_reply(f"Ich habe {label} neu geplant:\n- " + "\n- ".join(changed), True, calendar_result)
 
 
 def _add_activity_from_chat(trip: dict, message: str) -> dict:
@@ -596,8 +601,8 @@ def _add_activity_from_chat(trip: dict, message: str) -> dict:
         return _chat_change_reply("Ich habe keine passende Aktivitaet zum Hinzufuegen gefunden.", False)
 
     _add_activity_to_day(trip, day, activity)
-    _refresh_plan_after_change(trip)
-    return _chat_change_reply(f"Erledigt: Ich habe '{activity['name']}' an Tag {day_number} hinzugefuegt.", True)
+    calendar_result = _refresh_plan_after_change(trip, [day])
+    return _chat_change_reply(f"Erledigt: Ich habe '{activity['name']}' an Tag {day_number} hinzugefuegt.", True, calendar_result)
 
 
 def _replace_activity_from_chat(trip: dict, message: str) -> dict:
@@ -621,8 +626,8 @@ def _replace_activity_from_chat(trip: dict, message: str) -> dict:
 
     target_slot["activity"] = _prepare_activity_for_plan(replacement, trip)
     target_slot["notes"] = "Per Chat ersetzt"
-    _refresh_plan_after_change(trip)
-    return _chat_change_reply(f"Erledigt: Ich habe an Tag {day['day_number']} '{old_name}' durch '{replacement['name']}' ersetzt.", True)
+    calendar_result = _refresh_plan_after_change(trip, [day])
+    return _chat_change_reply(f"Erledigt: Ich habe an Tag {day['day_number']} '{old_name}' durch '{replacement['name']}' ersetzt.", True, calendar_result)
 
 
 def _plan_contains_activity(active_plan: dict, activity_name: str, except_slot: dict | None = None) -> bool:
@@ -764,8 +769,14 @@ def _category_from_previous_chat_context(trip: dict) -> str | None:
     return None
 
 
-def _chat_change_reply(message: str, changed: bool) -> dict:
+def _chat_change_reply(message: str, changed: bool, calendar_result: dict | None = None) -> dict:
     status = "completed" if changed else "failed"
+    if changed and calendar_result:
+        if calendar_result.get("updated"):
+            message += "\nKalender wurde aktualisiert."
+        else:
+            message += "\nPlan geändert, Kalender konnte nicht aktualisiert werden."
+
     return {
         "message": message,
         "agent_insights": [{
