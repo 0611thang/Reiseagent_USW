@@ -143,6 +143,58 @@ def sync_changed_days_to_calendar(days):
     }
 
 
+def sync_full_plan_to_calendar(plan):
+    try:
+        service = _get_calendar_service()
+        if not service:
+            return {"updated": False, "reason": "credentials_missing"}
+
+        days = plan.get("days", [])
+        if not days:
+            return {"updated": False, "reason": "no_days"}
+
+        results = []
+        for day in days:
+            date_str = day.get("date")
+            if date_str:
+                _delete_reiseagent_events_for_day(service, date_str)
+
+        for day in days:
+            date_str = day.get("date")
+            if not date_str:
+                results.append({"updated": False, "reason": "date_missing"})
+                continue
+
+            title = f"Reiseplan Tag {day.get('day_number')}"
+            description = _build_day_description(day)
+            marked_description = description + "\n\n" + REISEAGENT_BLOCK_MARKER
+
+            event = {
+                "summary": title,
+                "description": marked_description,
+                "start": {"date": date_str},
+                "end": {"date": (date.fromisoformat(date_str) + timedelta(days=1)).isoformat()},
+            }
+            created = service.events().insert(calendarId="primary", body=event).execute()
+            results.append({
+                "updated": True,
+                "event_id": created.get("id"),
+                "html_link": created.get("htmlLink"),
+            })
+
+        if all(result.get("updated") for result in results):
+            return {"updated": True, "results": results}
+
+        failed = next((r for r in results if not r.get("updated")), {})
+        return {
+            "updated": False,
+            "reason": failed.get("reason", "unknown"),
+            "results": results,
+        }
+    except Exception as error:
+        return {"updated": False, "reason": type(error).__name__}
+
+
 def _delete_reiseagent_events_for_day(service, date_str):
     result = service.events().list(
         calendarId="primary",

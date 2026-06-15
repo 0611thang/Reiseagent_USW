@@ -6,7 +6,7 @@ from datetime import datetime
 
 from providers.weather import get_weather_for_trip
 import providers.places as places_provider
-from providers.calendar import sync_changed_days_to_calendar
+from providers.calendar import sync_changed_days_to_calendar, sync_full_plan_to_calendar
 from agents import planning, budget, checklist, recommendation, replanning
 
 
@@ -77,6 +77,10 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
 
 
 def handle_chat_message(trip: dict, message: str) -> dict:
+    calendar_sync = _try_sync_calendar_from_chat(trip, message)
+    if calendar_sync:
+        return calendar_sync
+
     plan_change = _try_apply_plan_change(trip, message)
     if plan_change:
         return plan_change
@@ -124,6 +128,53 @@ def _try_apply_plan_change(trip: dict, message: str) -> dict | None:
         return _replace_activity_from_chat(trip, message)
 
     return _add_activity_from_chat(trip, message)
+
+
+def _try_sync_calendar_from_chat(trip: dict, message: str) -> dict | None:
+    text = _plain_text(message)
+    calendar_words = ["kalender", "calendar"]
+    sync_words = [
+        "ueberschreibe",
+        "uberschreibe",
+        "berschreibe",
+        "speichere",
+        "aktualisiere",
+        "trage",
+        "eintragen",
+        "synchronisiere",
+        "sync",
+    ]
+
+    if not any(word in text for word in calendar_words):
+        return None
+    if not any(word in text for word in sync_words):
+        return None
+
+    active_plan = trip.get("active_plan")
+    if not active_plan:
+        return _chat_change_reply("Kein aktiver Plan gefunden.", False)
+
+    result = sync_full_plan_to_calendar(active_plan)
+    if result.get("updated"):
+        return {
+            "message": "Kalender wurde mit dem aktuellen Reiseplan überschrieben.",
+            "agent_insights": [{
+                "agent_name": "calendar_agent",
+                "display_label": "Kalender Agent",
+                "status": "completed",
+                "summary": "Aktueller Reiseplan wurde vollstaendig in Google Calendar synchronisiert.",
+            }],
+        }
+
+    return {
+        "message": "Kalender konnte nicht aktualisiert werden, Plan bleibt aber erhalten.",
+        "agent_insights": [{
+            "agent_name": "calendar_agent",
+            "display_label": "Kalender Agent",
+            "status": "failed",
+            "summary": f"Kalender-Sync fehlgeschlagen: {result.get('reason', 'unknown')}",
+        }],
+    }
 
 
 def _plain_text(text: str) -> str:

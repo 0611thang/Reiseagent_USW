@@ -319,6 +319,43 @@ def render_left_col(trip: dict):
             })
             st.rerun()
 
+    if active_plan:
+        days = active_plan.get("days", [])
+        if days:
+            st.caption("Neue Alternativen suchen, ohne den Plan direkt zu ändern.")
+            day_labels = [f"Tag {day.get('day_number')}" for day in days]
+            selected_day_label = st.selectbox(
+                "Tag für neue Vorschläge",
+                day_labels,
+                key="alternative_day_select",
+            )
+            section = st.selectbox(
+                "Tagesabschnitt",
+                ["Vormittag", "Mittag", "Nachmittag", "Abend"],
+                key="alternative_section_select",
+            )
+            section_times = {
+                "Vormittag": "9 Uhr",
+                "Mittag": "12 Uhr",
+                "Nachmittag": "14 Uhr",
+                "Abend": "19 Uhr",
+            }
+            if st.button("Neue Vorschläge generieren", use_container_width=True):
+                day_number = selected_day_label.replace("Tag ", "")
+                time_text = section_times.get(section, "12 Uhr")
+                prompt = f"gib mir Vorschläge für Tag {day_number} um {time_text}"
+                st.session_state.chat_messages.append({"role": "user", "content": prompt})
+                trip["chat_messages"] = list(st.session_state.chat_messages)
+                result = coordinator.handle_chat_message(trip, prompt)
+                st.session_state.chat_messages.append({"role": "assistant", "content": result["message"]})
+                trip["chat_messages"] = list(st.session_state.chat_messages)
+                store.update_trip(trip["id"], {
+                    "chat_messages": trip["chat_messages"],
+                    "active_plan": trip.get("active_plan"),
+                    "agent_insights": trip.get("agent_insights", []),
+                })
+                st.rerun()
+
     # Agent Insights
     insights = trip.get("agent_insights", [])
     if insights:
