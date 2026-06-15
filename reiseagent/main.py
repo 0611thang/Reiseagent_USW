@@ -23,8 +23,8 @@ from agents.suggestion_agent import create_replacement_suggestion, create_sugges
 from providers.places import get_places
 from providers.weather import get_weather_for_trip
 from providers.navigation import get_route, get_both_routes
-from providers.telegram import send_navigation_reminder
-from providers.calendar import create_calendar_event
+from providers.telegram import send_navigation_reminder, send_plan_update
+from providers.calendar import create_calendar_event, sync_full_plan_to_calendar
 import profile_store
 
 app = FastAPI(title="Reiseplanungs-Agent API", version="1.0.0")
@@ -149,6 +149,9 @@ def _create_trip(request: dict, use_mock_weather: bool = False) -> dict:
         "agent_insights": result["agent_insights"],
     })
 
+    calendar_result = sync_full_plan_to_calendar(result["active_plan"])
+    send_plan_update(result["active_plan"], calendar_synced=calendar_result.get("updated", False))
+
     return _build_trip_response(store.get_trip(trip["id"]))
 
 
@@ -172,7 +175,13 @@ def chat(trip_id: str, body: ChatBody):
     assistant_msg = result["message"]
 
     trip["chat_messages"].append({"role": "assistant", "content": assistant_msg})
-    store.update_trip(trip_id, {"chat_messages": trip["chat_messages"]})
+    store.update_trip(trip_id, {
+        "chat_messages": trip["chat_messages"],
+        "active_plan": trip.get("active_plan"),
+        "agent_insights": trip.get("agent_insights", []),
+        "last_suggestions": trip.get("last_suggestions", []),
+        "last_suggestion_context": trip.get("last_suggestion_context", {}),
+    })
 
     return {"message": assistant_msg, "agent_insights": result.get("agent_insights", [])}
 
@@ -205,6 +214,7 @@ def simulate_weather(trip_id: str, body: WeatherSimulateBody):
     insight = replanning.get_agent_insight(len(proposal["changes"]))
     trip["agent_insights"].append(insight)
     store.update_trip(trip_id, {"agent_insights": trip["agent_insights"]})
+    send_plan_update(trip["active_plan"], warning_text=f"Wetterwarnung: {weather_event['description']}")
 
     return _build_trip_response(store.get_trip(trip_id))
 
@@ -229,6 +239,8 @@ def accept_proposal(trip_id: str, proposal_id: str):
         "active_plan": new_plan,
         "proposals": trip["proposals"],
     })
+    calendar_result = sync_full_plan_to_calendar(new_plan)
+    send_plan_update(new_plan, calendar_synced=calendar_result.get("updated", False))
 
     return _build_trip_response(store.get_trip(trip_id))
 

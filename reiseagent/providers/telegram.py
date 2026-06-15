@@ -43,6 +43,30 @@ def send_navigation_reminder(activity_name, start_time, routes):
     return send_message("\n".join(lines))
 
 
+def send_plan_update(plan, calendar_synced=False, warning_text=""):
+    """Schickt eine kurze Plan-Zusammenfassung, wenn Telegram eingerichtet ist."""
+    request = plan.get("request", {})
+    destination = request.get("destination", "deiner Reise")
+    days = plan.get("days", [])
+
+    lines = [f"Dein Reiseplan fuer {destination} wurde aktualisiert."]
+    for day in days[:3]:
+        names = []
+        for slot in day.get("time_slots", [])[:3]:
+            activity = slot.get("activity", {})
+            if activity.get("name"):
+                names.append(activity["name"])
+        if names:
+            lines.append(f"Tag {day.get('day_number')}: {', '.join(names)}")
+
+    if calendar_synced:
+        lines.append("Kalender wurde synchronisiert.")
+    if warning_text:
+        lines.append(warning_text)
+
+    return send_message("\n".join(lines[:6]))
+
+
 def get_recent_messages(hours=24):
     """Holt Nachrichten der letzten X Stunden via Telegram Bot API."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")

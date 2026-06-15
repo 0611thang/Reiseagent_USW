@@ -7,6 +7,7 @@ from datetime import datetime
 from providers.weather import get_weather_for_trip
 import providers.places as places_provider
 from providers.calendar import sync_changed_days_to_calendar, sync_full_plan_to_calendar
+from providers.telegram import send_plan_update
 from agents import planning, budget, checklist, recommendation, replanning
 
 
@@ -25,7 +26,7 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
         "agent_name": "weather_agent",
         "display_label": "Wetter Agent",
         "status": "completed",
-        "summary": f"Wetterdaten für {request['destination']} ({len(weather)} Tage) geladen.",
+        "summary": f"Wetterdaten fÃ¼r {request['destination']} ({len(weather)} Tage) geladen.",
     })
 
     all_activities = places_provider.get_places(request["destination"], request.get("interests", []))
@@ -34,7 +35,7 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
         "display_label": "POI Agent",
         "status": "completed",
         "summary": (
-            f"{len(all_activities)} Aktivitäten für {request['destination']} geladen. "
+            f"{len(all_activities)} AktivitÃ¤ten fÃ¼r {request['destination']} geladen. "
             f"{places_provider.LAST_PLACES_STATUS}"
         ),
     })
@@ -104,7 +105,8 @@ def _try_apply_plan_change(trip: dict, message: str) -> dict | None:
         "vorschlaege", "alternative", "alternativen", "anders", "woanders",
         "empfehlung", "empfehlungen", "was ist", "was kann ich",
         "nehme", "nehmen", "nimm", "loesche", "losche", "entferne", "entfernen",
-        "verschiebe", "uhrzeit", "shuffle", "mische", "neu",
+        "verschiebe", "uhrzeit", "shuffle", "mische", "neu", "mach", "aendere",
+        "andere",
     ]
     if not any(word in text for word in change_words):
         return None
@@ -118,7 +120,7 @@ def _try_apply_plan_change(trip: dict, message: str) -> dict | None:
     if any(word in text for word in ["loesche", "losche", "entferne", "entfernen"]):
         return _delete_activity_from_chat(trip, message)
 
-    if any(word in text for word in ["shuffle", "mische", "neu"]):
+    if any(word in text for word in ["shuffle", "mische", "neu", "mach", "aendere", "andere"]):
         return _replan_day_or_section_from_chat(trip, message)
 
     if any(word in text for word in ["fuelle", "fulle", "vervollstaendige", "vervollstandige", "plan auffuellen", "plan auffullen"]):
@@ -156,8 +158,9 @@ def _try_sync_calendar_from_chat(trip: dict, message: str) -> dict | None:
 
     result = sync_full_plan_to_calendar(active_plan)
     if result.get("updated"):
+        send_plan_update(active_plan, calendar_synced=True)
         return {
-            "message": "Kalender wurde mit dem aktuellen Reiseplan überschrieben.",
+            "message": "Kalender wurde mit dem aktuellen Reiseplan Ã¼berschrieben.",
             "agent_insights": [{
                 "agent_name": "calendar_agent",
                 "display_label": "Kalender Agent",
@@ -178,17 +181,15 @@ def _try_sync_calendar_from_chat(trip: dict, message: str) -> dict | None:
 
 
 def _plain_text(text: str) -> str:
-    normalized = unicodedata.normalize("NFKD", text.lower())
-    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
-    return (
-        ascii_text
-        .replace("ae", "ae")
-        .replace("oe", "oe")
-        .replace("ue", "ue")
-        .replace("Ã¼", "ue")
-        .replace("Ã¤", "ae")
-        .replace("Ã¶", "oe")
+    lowered = (
+        text.lower()
+        .replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
     )
+    normalized = unicodedata.normalize("NFKD", lowered)
+    return normalized.encode("ascii", "ignore").decode("ascii")
 
 
 def _is_suggestion_request(text: str) -> bool:
@@ -292,6 +293,8 @@ def _suggest_alternatives_from_chat(trip: dict, message: str) -> dict:
         return _chat_change_reply(f"Ich konnte Tag {day_number} im Plan nicht finden.", False)
 
     wanted_time = _extract_requested_time(message)
+    if not wanted_time:
+        wanted_time = _time_from_section_text(message)
     category = _category_from_text(message)
     if not category and wanted_time:
         slot = _find_slot_near_time(day, wanted_time)
@@ -305,6 +308,13 @@ def _suggest_alternatives_from_chat(trip: dict, message: str) -> dict:
     suggestions = activities[:5]
     if not suggestions:
         return _chat_change_reply("Ich habe gerade keine passenden Alternativen gefunden.", False)
+
+    trip["last_suggestions"] = suggestions
+    trip["last_suggestion_context"] = {
+        "day_number": day_number,
+        "time": wanted_time,
+        "category": category,
+    }
 
     time_text = f" um {wanted_time}" if wanted_time else ""
     lines = []
@@ -342,6 +352,17 @@ def _find_slot_near_time(day: dict, wanted_time: str) -> dict | None:
             best_distance = distance
 
     return best_slot
+
+
+def _time_from_section_text(message: str) -> str | None:
+    section = _section_from_text(message)
+    section_times = {
+        "Vormittag": "09:00",
+        "Mittag": "12:00",
+        "Nachmittag": "14:00",
+        "Abend": "19:00",
+    }
+    return section_times.get(section)
 
 
 def _category_from_text(message: str) -> str | None:
@@ -387,6 +408,10 @@ def _find_replacement_activity(trip: dict, message: str, category: str | None) -
     if suggestion_activity:
         return suggestion_activity
 
+    text_plain = _plain_text(message)
+    if "damit" in text_plain and trip.get("last_suggestions"):
+        return trip["last_suggestions"][0]
+
     replacement_text = ""
     match = re.search(r"(?:durch|mit)\s+(.+?)(?:\s+an\s+tag\s+\d+|\s+tag\s+\d+|$)", message, re.IGNORECASE)
     if match:
@@ -395,7 +420,7 @@ def _find_replacement_activity(trip: dict, message: str, category: str | None) -
     generic_words = [
         "einem anderen", "einen anderen", "anderes", "anderem", "andere",
         "spezifischen", "passenden", "neuen", "restaurant", "museum",
-        "aktivitaet", "aktivität", "vorschlag",
+        "aktivitaet", "aktivitÃ¤t", "vorschlag",
     ]
     is_generic = _is_generic_replacement_text(replacement_text)
 
@@ -448,6 +473,10 @@ def _activity_from_previous_chat_suggestion(trip: dict, message: str, category: 
     if not wanted_number:
         return None
 
+    saved_suggestions = trip.get("last_suggestions", [])
+    if 1 <= wanted_number <= len(saved_suggestions):
+        return saved_suggestions[wanted_number - 1]
+
     suggestions = _extract_last_assistant_suggestions(trip)
     if wanted_number < 1 or wanted_number > len(suggestions):
         return None
@@ -469,6 +498,8 @@ def _requested_suggestion_number(message: str) -> int | None:
     if match:
         return int(match.group(1))
     match = re.search(r"(ersten|erste|zweiten|zweite|dritten|dritte|vierten|vierte)\s*(vorschlag|option|alternative)", text)
+    if not match:
+        match = re.search(r"(ersten|erste|zweiten|zweite|dritten|dritte|vierten|vierte).{0,20}(vorschlag|option|alternative)", text)
     if not match:
         return None
     words = {
@@ -493,9 +524,9 @@ def _extract_last_assistant_suggestions(trip: dict) -> list[str]:
         suggestions = []
         for line in content.splitlines():
             raw = line.strip()
-            if not re.match(r"^(\d+[\.)]\s+|[-*•]\s+)", raw):
+            if not re.match(r"^(\d+[\.)]\s+|[-*â€¢]\s+)", raw):
                 continue
-            cleaned = re.sub(r"^[-*•]\s*", "", raw)
+            cleaned = re.sub(r"^[-*â€¢]\s*", "", raw)
             cleaned = re.sub(r"^\d+[\.)]\s*", "", cleaned)
             cleaned = cleaned.strip(" -:;")
             if not cleaned:
@@ -557,12 +588,19 @@ def _find_target_slot(active_plan: dict, message: str, category: str | None):
 
 
 def _activity_from_text_or_pool(trip: dict, message: str) -> dict | None:
+    category = _category_from_text(message)
+    activities = _available_activities(trip)
+    if category:
+        for activity in activities:
+            if _activity_matches_category(activity, category):
+                return activity
+        return _custom_activity(trip, _generic_name_for_category(category), category=category)
+
     cleaned = re.sub(r".*(hinzufuegen|hinzufügen|hinzufugen|fuege|füge|fuge|einsetzen|setze|plane)\s*", "", message, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*(an|auf|in)?\s*tag\s*\d+.*", "", cleaned, flags=re.IGNORECASE).strip()
     if cleaned and len(cleaned) >= 3:
         return _custom_activity(trip, cleaned)
 
-    activities = _available_activities(trip)
     if not activities:
         return None
 
@@ -572,7 +610,6 @@ def _activity_from_text_or_pool(trip: dict, message: str) -> dict | None:
             return activity
 
     return activities[0]
-
 
 def _custom_activity(trip: dict, name: str, category: str = "activity") -> dict:
     destination = trip.get("request", {}).get("destination", "")
@@ -615,10 +652,10 @@ def _clean_custom_activity_name(name: str) -> str:
     cleaned = re.sub(r"^ein\s+besuch\s+(des|der|dem|den)?\s*", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"^(der|die|das|dem|den|ein|eine|einem|einen)\s+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+fuer\s+.+$", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s+für\s+.+$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+fÃ¼r\s+.+$", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+oder\s+(des|der|dem|den)?\s*", " und ", cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.replace("Kurfuerstendamms", "Kurfuerstendamm")
-    cleaned = cleaned.replace("Kurfürstendamms", "Kurfürstendamm")
+    cleaned = cleaned.replace("KurfÃ¼rstendamms", "KurfÃ¼rstendamm")
     cleaned = cleaned.replace("Friedrichshains", "Friedrichshain")
     if not cleaned:
         return "Alternative Aktivitaet"
@@ -672,9 +709,9 @@ def _refresh_plan_after_change(trip: dict, changed_days: list | None = None) -> 
         "status": "completed",
         "summary": "Aktiver Plan wurde durch Chat-Befehl angepasst.",
     })
-    if changed_days:
-        return sync_changed_days_to_calendar(changed_days)
-    return {"updated": False, "reason": "no_days"}
+    calendar_result = sync_full_plan_to_calendar(active_plan)
+    send_plan_update(active_plan, calendar_synced=calendar_result.get("updated", False))
+    return calendar_result
 
 
 def _fill_plan_from_chat(trip: dict, message: str) -> dict:
@@ -792,6 +829,12 @@ def _add_activity_from_chat(trip: dict, message: str) -> dict:
         return _chat_change_reply("Ich habe keine passende Aktivitaet zum Hinzufuegen gefunden.", False)
 
     _add_activity_to_day(trip, day, activity)
+    section_time = _time_from_section_text(message)
+    if section_time and day.get("time_slots"):
+        new_slot = day["time_slots"][-1]
+        duration = activity.get("duration_minutes", 90)
+        new_slot["start_time"] = section_time
+        new_slot["end_time"] = _minutes_to_time(_time_to_minutes(section_time) + duration)
     calendar_result = _refresh_plan_after_change(trip, [day])
     return _chat_change_reply(f"Erledigt: Ich habe '{activity['name']}' an Tag {day_number} hinzugefuegt.", True, calendar_result)
 
@@ -801,9 +844,16 @@ def _replace_activity_from_chat(trip: dict, message: str) -> dict:
     category = _category_from_text(message)
     if not category:
         category = _category_from_previous_chat_context(trip)
-    day, target_slot = _find_target_slot(active_plan, message, category)
+
+    day, target_slot = _find_target_slot_from_suggestion_context(trip, message)
     if not day or not target_slot:
-        return _chat_change_reply("Ich konnte keine passende Aktivitaet im Plan finden, die ich ersetzen kann.", False)
+        day, target_slot = _find_target_slot(active_plan, message, category)
+
+    if not day or not target_slot:
+        return _chat_change_reply(
+            "Ich konnte keine passende Aktivitaet im Plan finden. Sag bitte z. B.: nimm Vorschlag 2 fuer Tag 3 um 12 Uhr.",
+            False,
+        )
 
     replacement = _find_replacement_activity(trip, message, category)
     if not replacement:
@@ -819,6 +869,37 @@ def _replace_activity_from_chat(trip: dict, message: str) -> dict:
     target_slot["notes"] = "Per Chat ersetzt"
     calendar_result = _refresh_plan_after_change(trip, [day])
     return _chat_change_reply(f"Erledigt: Ich habe an Tag {day['day_number']} '{old_name}' durch '{replacement['name']}' ersetzt.", True, calendar_result)
+
+
+def _find_target_slot_from_suggestion_context(trip: dict, message: str):
+    if not _requested_suggestion_number(message):
+        return None, None
+
+    active_plan = trip.get("active_plan", {})
+    context = trip.get("last_suggestion_context", {})
+    day_number = _extract_day_number(message) or context.get("day_number")
+    if not day_number:
+        return None, None
+
+    day = _find_day(active_plan, int(day_number))
+    if not day:
+        return None, None
+
+    wanted_time = _extract_requested_time(message) or context.get("time")
+    if wanted_time:
+        slot = _find_slot_near_time(day, wanted_time)
+        return day, slot
+
+    category = context.get("category")
+    if category:
+        for slot in day.get("time_slots", []):
+            if _activity_matches_category(slot.get("activity", {}), category):
+                return day, slot
+
+    slots = day.get("time_slots", [])
+    if slots:
+        return day, slots[-1]
+    return None, None
 
 
 def _plan_contains_activity(active_plan: dict, activity_name: str, except_slot: dict | None = None) -> bool:
@@ -837,6 +918,13 @@ def _find_slot_for_change(active_plan: dict, message: str):
     days = active_plan.get("days", [])
     if day_number:
         days = [d for d in days if d.get("day_number") == day_number]
+
+    wanted_time = _extract_requested_time(message)
+    if wanted_time:
+        for day in days:
+            slot = _find_slot_near_time(day, wanted_time)
+            if slot:
+                return day, slot
 
     wanted = _extract_activity_name_from_message(message)
     if wanted:
@@ -859,10 +947,10 @@ def _find_slot_for_change(active_plan: dict, message: str):
 def _extract_activity_name_from_message(message: str) -> str:
     text = message.strip()
     patterns = [
-        r"(?:loesche|lösche|losche|entferne)\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
+        r"(?:loesche|lÃ¶sche|losche|entferne)\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
         r"(?:verschiebe|setze)\s+(.+?)\s+(?:auf|von|um)\s+",
         r"aktivitaet\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
-        r"aktivität\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
+        r"aktivitÃ¤t\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -966,7 +1054,7 @@ def _chat_change_reply(message: str, changed: bool, calendar_result: dict | None
         if calendar_result.get("updated"):
             message += "\nKalender wurde aktualisiert."
         else:
-            message += "\nPlan geändert, Kalender konnte nicht aktualisiert werden."
+            message += "\nPlan geÃ¤ndert, Kalender konnte nicht aktualisiert werden."
 
     return {
         "message": message,
@@ -1032,16 +1120,16 @@ def _rule_based_response(trip: dict, message: str) -> dict:
                 for d in active_plan["days"]
                 if d.get("weather")
             ]
-            reply = "Wetterübersicht: " + ", ".join(conditions) if conditions else "Keine Wetterdaten verfügbar."
+            reply = "WetterÃ¼bersicht: " + ", ".join(conditions) if conditions else "Keine Wetterdaten verfÃ¼gbar."
         else:
             reply = "Kein aktiver Plan gefunden."
 
-    elif any(kw in msg_lower for kw in ["aktivität", "aktivitaet", "programm", "was machen", "highlights"]):
+    elif any(kw in msg_lower for kw in ["aktivitÃ¤t", "aktivitaet", "programm", "was machen", "highlights"]):
         if active_plan:
             day1 = active_plan["days"][0] if active_plan["days"] else None
             if day1:
                 acts = [slot["activity"]["name"] for slot in day1.get("time_slots", [])]
-                reply = f"Highlights an Tag 1: {', '.join(acts)}." if acts else "Keine Aktivitäten geplant."
+                reply = f"Highlights an Tag 1: {', '.join(acts)}." if acts else "Keine AktivitÃ¤ten geplant."
             else:
                 reply = "Plan ist leer."
         else:
@@ -1055,7 +1143,7 @@ def _rule_based_response(trip: dict, message: str) -> dict:
         dest = trip.get("request", {}).get("destination", "deinem Reiseziel")
         reply = (
             f"Ich helfe dir gerne mit deiner Reise nach {dest}! "
-            f"Du kannst mich nach Budget, Wetter, Aktivitäten oder Reisetipps fragen."
+            f"Du kannst mich nach Budget, Wetter, AktivitÃ¤ten oder Reisetipps fragen."
         )
 
     return {

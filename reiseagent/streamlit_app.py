@@ -13,6 +13,8 @@ from streamlit_folium import st_folium
 import store
 from agents import coordinator, replanning
 from providers.places import get_places
+from providers.calendar import sync_full_plan_to_calendar
+from providers.telegram import send_plan_update
 
 st.set_page_config(
     page_title="Reiseplanungs-Agent",
@@ -219,6 +221,33 @@ def init_session():
         st.session_state.trip_id = None
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
+    if "status_messages" not in st.session_state:
+        st.session_state.status_messages = []
+    if "last_suggestions" not in st.session_state:
+        st.session_state.last_suggestions = []
+    if "last_suggestion_context" not in st.session_state:
+        st.session_state.last_suggestion_context = {}
+
+
+def add_status(message: str):
+    st.session_state.status_messages.append(message)
+    st.session_state.status_messages = st.session_state.status_messages[-5:]
+
+
+def sync_plan_and_notify(plan: dict, reason: str = "Plan aktualisiert") -> dict:
+    calendar_result = sync_full_plan_to_calendar(plan)
+    calendar_ok = calendar_result.get("updated", False)
+    telegram_ok = send_plan_update(plan, calendar_synced=calendar_ok)
+
+    if calendar_ok:
+        add_status(f"{reason}: Kalender synchronisiert.")
+    else:
+        add_status(f"{reason}: Kalender nicht eingerichtet oder nicht erreichbar.")
+
+    if telegram_ok:
+        add_status("Telegram gesendet.")
+
+    return calendar_result
 
 
 def get_current_trip() -> dict | None:
@@ -246,6 +275,7 @@ def load_demo_trip():
         "checklist": checklist_data,
         "agent_insights": result["agent_insights"],
     })
+    sync_plan_and_notify(result["active_plan"], "Demo-Reise erstellt")
     st.session_state.trip_id = trip["id"]
     st.session_state.chat_messages = []
 
@@ -275,6 +305,8 @@ def simulate_rain_day2():
         "proposals": trip["proposals"],
         "agent_insights": trip["agent_insights"],
     })
+    send_plan_update(trip["active_plan"], warning_text="Wetterwarnung erkannt: Regen an Tag 2.")
+    add_status("Wetterwarnung erkannt und Telegram optional benachrichtigt.")
 
 
 # ─────────────────────────── column renderers ────────────────────────────────
@@ -311,11 +343,19 @@ def render_left_col(trip: dict):
             result = coordinator.handle_chat_message(trip, user_input.strip())
             assistant_message = {"role": "assistant", "content": result["message"]}
             st.session_state.chat_messages.append(assistant_message)
+            if "Kalender wurde" in result["message"]:
+                add_status("Kalender synchronisiert.")
+            elif "Kalender konnte nicht aktualisiert werden" in result["message"]:
+                add_status("Kalender nicht eingerichtet oder nicht erreichbar.")
+            st.session_state.last_suggestions = trip.get("last_suggestions", [])
+            st.session_state.last_suggestion_context = trip.get("last_suggestion_context", {})
             trip["chat_messages"] = list(st.session_state.chat_messages)
             store.update_trip(trip["id"], {
                 "chat_messages": trip["chat_messages"],
                 "active_plan": trip.get("active_plan"),
                 "agent_insights": trip.get("agent_insights", []),
+                "last_suggestions": trip.get("last_suggestions", []),
+                "last_suggestion_context": trip.get("last_suggestion_context", {}),
             })
             st.rerun()
 
@@ -334,6 +374,11 @@ def render_left_col(trip: dict):
                 ["Vormittag", "Mittag", "Nachmittag", "Abend"],
                 key="alternative_section_select",
             )
+            custom_time = st.selectbox(
+                "Uhrzeit",
+                ["09 Uhr", "12 Uhr", "14 Uhr", "19 Uhr"],
+                key="alternative_time_select",
+            )
             section_times = {
                 "Vormittag": "9 Uhr",
                 "Mittag": "12 Uhr",
@@ -342,19 +387,53 @@ def render_left_col(trip: dict):
             }
             if st.button("Neue Vorschläge generieren", use_container_width=True):
                 day_number = selected_day_label.replace("Tag ", "")
-                time_text = section_times.get(section, "12 Uhr")
+                time_text = custom_time or section_times.get(section, "12 Uhr")
                 prompt = f"gib mir Vorschläge für Tag {day_number} um {time_text}"
                 st.session_state.chat_messages.append({"role": "user", "content": prompt})
                 trip["chat_messages"] = list(st.session_state.chat_messages)
                 result = coordinator.handle_chat_message(trip, prompt)
                 st.session_state.chat_messages.append({"role": "assistant", "content": result["message"]})
+                st.session_state.last_suggestions = trip.get("last_suggestions", [])
+                st.session_state.last_suggestion_context = trip.get("last_suggestion_context", {})
                 trip["chat_messages"] = list(st.session_state.chat_messages)
+                add_status("Vorschläge generiert.")
                 store.update_trip(trip["id"], {
                     "chat_messages": trip["chat_messages"],
                     "active_plan": trip.get("active_plan"),
                     "agent_insights": trip.get("agent_insights", []),
+                    "last_suggestions": trip.get("last_suggestions", []),
+                    "last_suggestion_context": trip.get("last_suggestion_context", {}),
                 })
                 st.rerun()
+
+            suggestions = (trip.get("last_suggestions") or st.session_state.last_suggestions)[:5]
+            if suggestions:
+                st.markdown("**Letzte Vorschläge**")
+                for index, activity in enumerate(suggestions, start=1):
+                    name = activity.get("name", "Vorschlag")
+                    category = activity.get("category", "activity")
+                    cols = st.columns([3, 2])
+                    with cols[0]:
+                        st.caption(f"{index}. {name} ({category})")
+                    with cols[1]:
+                        if st.button("Vorschlag übernehmen", key=f"accept_chat_suggestion_{index}", use_container_width=True):
+                            prompt = f"nimm Vorschlag {index}"
+                            st.session_state.chat_messages.append({"role": "user", "content": prompt})
+                            trip["chat_messages"] = list(st.session_state.chat_messages)
+                            result = coordinator.handle_chat_message(trip, prompt)
+                            st.session_state.chat_messages.append({"role": "assistant", "content": result["message"]})
+                            st.session_state.last_suggestions = trip.get("last_suggestions", [])
+                            st.session_state.last_suggestion_context = trip.get("last_suggestion_context", {})
+                            trip["chat_messages"] = list(st.session_state.chat_messages)
+                            add_status("Vorschlag übernommen.")
+                            store.update_trip(trip["id"], {
+                                "chat_messages": trip["chat_messages"],
+                                "active_plan": trip.get("active_plan"),
+                                "agent_insights": trip.get("agent_insights", []),
+                                "last_suggestions": trip.get("last_suggestions", []),
+                                "last_suggestion_context": trip.get("last_suggestion_context", {}),
+                            })
+                            st.rerun()
 
     # Agent Insights
     insights = trip.get("agent_insights", [])
@@ -454,6 +533,57 @@ def render_middle_col(plan: dict):
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
+
+
+def render_plan_actions(trip: dict):
+    plan = trip.get("active_plan", {})
+    days = plan.get("days", [])
+    if not days:
+        return
+
+    with st.expander("Plan schnell bearbeiten"):
+        for day in days:
+            st.caption(_format_day_label(day))
+            for slot in day.get("time_slots", []):
+                activity = slot.get("activity", {})
+                name = activity.get("name", "Aktivität")
+                label = f"{slot.get('start_time')} - {name}"
+                cols = st.columns([3, 1, 1])
+                with cols[0]:
+                    st.write(label)
+                with cols[1]:
+                    if st.button("Löschen", key=f"delete_{day['day_number']}_{slot['id']}"):
+                        prompt = f"lösche {name} an Tag {day['day_number']}"
+                        _send_chat_command_from_ui(trip, prompt)
+                        add_status("Aktivität gelöscht.")
+                        st.rerun()
+                with cols[2]:
+                    if st.button("Alternative", key=f"alt_{day['day_number']}_{slot['id']}"):
+                        prompt = f"gib mir Vorschläge für Tag {day['day_number']} um {slot.get('start_time')}"
+                        _send_chat_command_from_ui(trip, prompt)
+                        add_status("Alternativen gesucht.")
+                        st.rerun()
+
+
+def _send_chat_command_from_ui(trip: dict, prompt: str):
+    st.session_state.chat_messages.append({"role": "user", "content": prompt})
+    trip["chat_messages"] = list(st.session_state.chat_messages)
+    result = coordinator.handle_chat_message(trip, prompt)
+    st.session_state.chat_messages.append({"role": "assistant", "content": result["message"]})
+    if "Kalender wurde" in result["message"]:
+        add_status("Kalender synchronisiert.")
+    elif "Kalender konnte nicht aktualisiert werden" in result["message"]:
+        add_status("Kalender nicht eingerichtet oder nicht erreichbar.")
+    st.session_state.last_suggestions = trip.get("last_suggestions", [])
+    st.session_state.last_suggestion_context = trip.get("last_suggestion_context", {})
+    trip["chat_messages"] = list(st.session_state.chat_messages)
+    store.update_trip(trip["id"], {
+        "chat_messages": trip["chat_messages"],
+        "active_plan": trip.get("active_plan"),
+        "agent_insights": trip.get("agent_insights", []),
+        "last_suggestions": trip.get("last_suggestions", []),
+        "last_suggestion_context": trip.get("last_suggestion_context", {}),
+    })
 
 
 def render_right_col(plan: dict):
@@ -582,6 +712,7 @@ def render_proposal_banner(trip: dict):
             new_plan = proposal["proposed_plan"]
             new_plan["status"] = "active"
             store.update_trip(trip["id"], {"active_plan": new_plan, "proposals": trip["proposals"]})
+            sync_plan_and_notify(new_plan, "Neuplanung übernommen")
             st.success("Neuplanung übernommen!")
             st.rerun()
     with cr:
@@ -712,6 +843,9 @@ def main():
                 simulate_rain_day2()
                 st.rerun()
 
+    for msg in st.session_state.status_messages:
+        st.info(msg)
+
     # ── Eigene Reise planen ──────────────────────────────────────────────────
     with st.expander("Eigene Reise planen"):
         with st.form("plan_form"):
@@ -749,6 +883,7 @@ def main():
                         "checklist": cl,
                         "agent_insights": result["agent_insights"],
                     })
+                    sync_plan_and_notify(result["active_plan"], "Plan erstellt")
                     st.session_state.trip_id = trip_obj["id"]
                     st.session_state.chat_messages = []
                 st.rerun()
@@ -777,6 +912,7 @@ def main():
 
     with col_plan:
         render_middle_col(active_plan)
+        render_plan_actions(trip)
 
     with col_budget:
         render_right_col(active_plan)

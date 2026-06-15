@@ -32,8 +32,10 @@ BAD_NAME_WORDS = [
     "apartments",
     "office",
     "offices",
+    "school",
     "büro",
     "buro",
+    "facade",
     "building",
     "house no",
     "wohnhaus",
@@ -458,6 +460,9 @@ def _place_to_activity(place: dict, destination: str, interests: list) -> dict |
         return None
 
     category = _map_kind(kinds_text)
+    if not _category_allowed_by_interests(category, interests):
+        return None
+
     lat, lng = _get_place_coordinates(place)
     quality_score = _quality_score(place, name, kinds_text)
 
@@ -525,6 +530,17 @@ def _is_bad_place(place: dict, name: str, kinds_text: str) -> bool:
     return False
 
 
+def _category_allowed_by_interests(category: str, interests: list) -> bool:
+    interest_text = " ".join(_normalize_text(item) for item in interests)
+    if category == "food":
+        return "gutes essen" in interest_text or "essen" in interest_text or "restaurant" in interest_text
+    if category == "shopping":
+        return "shopping" in interest_text
+    if category == "nature":
+        return "natur" in interest_text or "spaziergaenge" in interest_text or "spaziergang" in interest_text
+    return True
+
+
 def _quality_score(place: dict, name: str, kinds_str: str) -> int:
     normalized_name = _normalize_text(name)
     normalized_kinds = _normalize_text(kinds_str)
@@ -588,12 +604,31 @@ def _rank_and_deduplicate(activities: list) -> list:
 
     ranked = list(best_by_name.values())
     ranked.sort(key=lambda item: item.get("quality_score", 0), reverse=True)
+    ranked = _balance_categories(ranked)
 
     stable_highlights = ranked[:4]
     variable_pool = ranked[4:24]
     random.shuffle(variable_pool)
 
     return (stable_highlights + variable_pool)[:30]
+
+
+def _balance_categories(ranked: list) -> list:
+    selected = []
+    counts = {}
+
+    for activity in ranked:
+        category = activity.get("category", "sightseeing")
+        limit = 5 if category == "culture" else 4
+        if counts.get(category, 0) < limit:
+            selected.append(activity)
+            counts[category] = counts.get(category, 0) + 1
+
+    for activity in ranked:
+        if activity not in selected:
+            selected.append(activity)
+
+    return selected
 
 
 def _get_city_key(destination: str) -> str:
@@ -717,7 +752,11 @@ def _extract_tags(kinds_str: str, interests: list) -> list:
 def get_places(destination: str, interests: list) -> list:
     global LAST_PLACES_STATUS
 
-    city_highlights = _get_city_highlight_activities(destination)
+    city_highlights = [
+        activity
+        for activity in _get_city_highlight_activities(destination)
+        if _category_allowed_by_interests(activity.get("category", ""), interests)
+    ]
 
     api_results = _fetch_from_opentripmap(destination, interests)
 
