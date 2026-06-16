@@ -282,6 +282,114 @@ def _available_activities(trip: dict) -> list:
     return [a for a in activities if a["name"].lower() not in used_names]
 
 
+def _activity_name(slot: dict | None) -> str:
+    if not slot:
+        return ""
+    return slot.get("activity", {}).get("name", "")
+
+
+def _is_rainy_day(day: dict) -> bool:
+    weather = day.get("weather", {})
+    condition = _plain_text(str(weather.get("condition", "")))
+    description = _plain_text(str(weather.get("description", "")))
+    if weather.get("affects_outdoor_activities"):
+        return True
+    return any(word in condition or word in description for word in ["rain", "regen", "storm", "gewitter"])
+
+
+def _budget_is_tight(trip: dict) -> bool:
+    summary = trip.get("active_plan", {}).get("budget_summary", {})
+    remaining = float(summary.get("remaining", 0) or 0)
+    total = float(summary.get("budget_total", 0) or trip.get("request", {}).get("budget_total", 0) or 0)
+    if total <= 0:
+        return False
+    return remaining <= total * 0.15
+
+
+def _suggestion_preferences(message: str, day: dict, trip: dict) -> dict:
+    text = _plain_text(message)
+    preferences = {
+        "category": _category_from_text(message),
+        "indoor": False,
+        "outdoor": False,
+        "cheap": False,
+        "rainy": _is_rainy_day(day),
+    }
+
+    if any(word in text for word in ["drinnen", "indoor", "schlechtes wetter", "regen"]):
+        preferences["indoor"] = True
+    if any(word in text for word in ["draussen", "draußen", "outdoor", "spaziergang", "natur"]):
+        preferences["outdoor"] = True
+    if any(word in text for word in ["guenstig", "gunstig", "kostenlos", "billig", "budget", "knapp"]):
+        preferences["cheap"] = True
+    if _budget_is_tight(trip):
+        preferences["cheap"] = True
+    if preferences["rainy"]:
+        preferences["indoor"] = True
+
+    return preferences
+
+
+def _activity_cost(activity: dict) -> float:
+    return float(activity.get("estimated_cost_per_person", 0) or 0)
+
+
+def _activity_score_for_chat(activity: dict, preferences: dict) -> float:
+    score = 0.0
+    category = preferences.get("category")
+
+    if category and _activity_matches_category(activity, category):
+        score += 30
+
+    if preferences.get("indoor") and activity.get("indoor") is True:
+        score += 20
+    if preferences.get("outdoor") and activity.get("indoor") is False:
+        score += 15
+    if preferences.get("cheap"):
+        cost = _activity_cost(activity)
+        if cost <= 0:
+            score += 20
+        elif cost <= 10:
+            score += 12
+        elif cost >= 30:
+            score -= 8
+
+    raw_score = activity.get("quality_score") or activity.get("score") or 0
+    if isinstance(raw_score, dict):
+        raw_score = raw_score.get("overall_score", 0)
+    try:
+        score += float(raw_score) * 10
+    except (TypeError, ValueError):
+        pass
+
+    if activity.get("source") in ["wikipedia", "wikidata", "opentripmap"]:
+        score += 3
+
+    return score
+
+
+def _pick_chat_suggestions(activities: list, preferences: dict, minimum: int = 3, maximum: int = 5) -> list:
+    if not activities:
+        return []
+
+    preferred = []
+    category = preferences.get("category")
+    if category:
+        preferred = [activity for activity in activities if _activity_matches_category(activity, category)]
+
+    pool = preferred[:]
+    if len(pool) < minimum:
+        used = {_plain_text(activity.get("name", "")) for activity in pool}
+        for activity in activities:
+            name = _plain_text(activity.get("name", ""))
+            if name not in used:
+                pool.append(activity)
+                used.add(name)
+
+    pool.sort(key=lambda item: _activity_score_for_chat(item, preferences), reverse=True)
+    return pool[:maximum]
+
+
 def _suggest_alternatives_from_chat(trip: dict, message: str) -> dict:
     active_plan = trip.get("active_plan")
     if not active_plan:
@@ -292,20 +400,16 @@ def _suggest_alternatives_from_chat(trip: dict, message: str) -> dict:
     if not day:
         return _chat_change_reply(f"Ich konnte Tag {day_number} im Plan nicht finden.", False)
 
-    wanted_time = _extract_requested_time(message)
-    if not wanted_time:
-        wanted_time = _time_from_section_text(message)
-    category = _category_from_text(message)
-    if not category and wanted_time:
-        slot = _find_slot_near_time(day, wanted_time)
-        if slot:
-            category = slot["activity"].get("category")
+    wanted_time = _extract_requested_time(message) or _time_from_section_text(message)
+    current_slot = _find_slot_near_time(day, wanted_time) if wanted_time else None
+    preferences = _suggestion_preferences(message, day, trip)
+    category = preferences.get("category")
+    if not category and current_slot:
+        category = current_slot.get("activity", {}).get("category")
+        preferences["category"] = category
 
     activities = _available_activities(trip)
-    if category:
-        activities = [activity for activity in activities if _activity_matches_category(activity, category)]
-
-    suggestions = activities[:5]
+    suggestions = _pick_chat_suggestions(activities, preferences)
     if not suggestions:
         return _chat_change_reply("Ich habe gerade keine passenden Alternativen gefunden.", False)
 
@@ -314,6 +418,8 @@ def _suggest_alternatives_from_chat(trip: dict, message: str) -> dict:
         "day_number": day_number,
         "time": wanted_time,
         "category": category,
+        "target_slot_id": current_slot.get("id") if current_slot else None,
+        "target_activity_name": _activity_name(current_slot),
     }
 
     time_text = f" um {wanted_time}" if wanted_time else ""
@@ -322,10 +428,26 @@ def _suggest_alternatives_from_chat(trip: dict, message: str) -> dict:
         category_text = activity.get("category", "Aktivitaet")
         lines.append(f"{index}. {activity['name']} ({category_text})")
 
+    current_text = ""
+    if current_slot:
+        current_text = (
+            "Aktuell ist geplant:\n"
+            f"{current_slot.get('start_time', wanted_time)} Uhr - {_activity_name(current_slot)}\n\n"
+        )
+
+    hint = ""
+    if preferences.get("rainy"):
+        hint = " Wegen Regen bevorzuge ich eher Indoor-Orte.\n"
+    if preferences.get("cheap"):
+        hint += " Ich achte dabei besonders auf guenstige oder kostenlose Optionen.\n"
+
     reply = (
-        f"Ich habe diese Alternativen fuer Tag {day_number}{time_text} gefunden:\n"
+        current_text
+        + f"Ich habe folgende Alternativen fuer Tag {day_number}{time_text} gefunden:\n"
         + "\n".join(lines)
-        + "\n\nWenn du eine davon uebernehmen moechtest, sag z. B.: nimm Vorschlag 2."
+        + "\n"
+        + hint
+        + "\nWenn du eine davon uebernehmen moechtest, sag z. B.: nimm Vorschlag 2."
     )
 
     return {
@@ -369,9 +491,9 @@ def _category_from_text(message: str) -> str | None:
     text = _plain_text(message)
     if "shopping" in text or "laden" in text or "markt" in text:
         return "shopping"
-    if "restaurant" in text or "essen" in text:
+    if any(word in text for word in ["restaurant", "essen", "mittagessen", "abendessen", "cafe", "food"]):
         return "food"
-    if "museum" in text or "museen" in text:
+    if any(word in text for word in ["museum", "museen", "kirche", "dom", "kultur", "culture"]):
         return "culture"
     if "spaziergang" in text or "park" in text or "natur" in text:
         return "nature"
@@ -497,6 +619,9 @@ def _requested_suggestion_number(message: str) -> int | None:
     match = re.search(r"(\d+)\.?\s*(vorschlag|option|alternative)", text)
     if match:
         return int(match.group(1))
+    match = re.search(r"(vorschlag|option|alternative)\s*(\d+)", text)
+    if match:
+        return int(match.group(2))
     match = re.search(r"(ersten|erste|zweiten|zweite|dritten|dritte|vierten|vierte)\s*(vorschlag|option|alternative)", text)
     if not match:
         match = re.search(r"(ersten|erste|zweiten|zweite|dritten|dritte|vierten|vierte).{0,20}(vorschlag|option|alternative)", text)
@@ -868,7 +993,11 @@ def _replace_activity_from_chat(trip: dict, message: str) -> dict:
     target_slot["activity"] = _prepare_activity_for_plan(replacement, trip)
     target_slot["notes"] = "Per Chat ersetzt"
     calendar_result = _refresh_plan_after_change(trip, [day])
-    return _chat_change_reply(f"Erledigt: Ich habe an Tag {day['day_number']} '{old_name}' durch '{replacement['name']}' ersetzt.", True, calendar_result)
+    return _chat_change_reply(
+        f"Ich habe {old_name} an Tag {day['day_number']} durch {replacement['name']} ersetzt.",
+        True,
+        calendar_result,
+    )
 
 
 def _find_target_slot_from_suggestion_context(trip: dict, message: str):
@@ -884,6 +1013,12 @@ def _find_target_slot_from_suggestion_context(trip: dict, message: str):
     day = _find_day(active_plan, int(day_number))
     if not day:
         return None, None
+
+    target_slot_id = context.get("target_slot_id")
+    if target_slot_id:
+        for slot in day.get("time_slots", []):
+            if slot.get("id") == target_slot_id:
+                return day, slot
 
     wanted_time = _extract_requested_time(message) or context.get("time")
     if wanted_time:
@@ -1052,7 +1187,7 @@ def _chat_change_reply(message: str, changed: bool, calendar_result: dict | None
     status = "completed" if changed else "failed"
     if changed and calendar_result:
         if calendar_result.get("updated"):
-            message += "\nKalender wurde aktualisiert."
+            message += "\nDer Reiseplan und Kalender wurden aktualisiert."
         else:
             message += "\nPlan geÃ¤ndert, Kalender konnte nicht aktualisiert werden."
 
