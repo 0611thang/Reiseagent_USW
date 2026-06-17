@@ -11,6 +11,7 @@ import folium
 from streamlit_folium import st_folium
 
 import store
+store.init_db()
 from agents import coordinator, replanning
 from providers.places import get_places
 from providers.calendar import sync_full_plan_to_calendar

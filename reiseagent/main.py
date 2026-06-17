@@ -54,6 +54,8 @@ def _monitoring_loop():
 def start_background_threads():
     global _monitoring_thread_started
 
+    store.init_db()
+
     if not _monitoring_thread_started:
         _monitoring_thread_started = True
         thread = threading.Thread(target=_monitoring_loop, daemon=True)
@@ -396,7 +398,7 @@ def _navigation_reminder_loop():
             now = datetime.now()
             current_time = now.strftime("%H:%M")
 
-            for trip in store.trips.values():
+            for trip in store.list_trips():
                 plan = trip.get("active_plan")
                 if not plan:
                     continue

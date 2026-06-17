@@ -26,7 +26,7 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
         "agent_name": "weather_agent",
         "display_label": "Wetter Agent",
         "status": "completed",
-        "summary": f"Wetterdaten fÃ¼r {request['destination']} ({len(weather)} Tage) geladen.",
+        "summary": f"Wetterdaten für {request['destination']} ({len(weather)} Tage) geladen.",
     })
 
     all_activities = places_provider.get_places(request["destination"], request.get("interests", []))
@@ -35,7 +35,7 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
         "display_label": "POI Agent",
         "status": "completed",
         "summary": (
-            f"{len(all_activities)} AktivitÃ¤ten fÃ¼r {request['destination']} geladen. "
+            f"{len(all_activities)} Aktivitäten für {request['destination']} geladen. "
             f"{places_provider.LAST_PLACES_STATUS}"
         ),
     })
@@ -160,7 +160,7 @@ def _try_sync_calendar_from_chat(trip: dict, message: str) -> dict | None:
     if result.get("updated"):
         send_plan_update(active_plan, calendar_synced=True)
         return {
-            "message": "Kalender wurde mit dem aktuellen Reiseplan Ã¼berschrieben.",
+            "message": "Kalender wurde mit dem aktuellen Reiseplan überschrieben.",
             "agent_insights": [{
                 "agent_name": "calendar_agent",
                 "display_label": "Kalender Agent",
@@ -542,7 +542,7 @@ def _find_replacement_activity(trip: dict, message: str, category: str | None) -
     generic_words = [
         "einem anderen", "einen anderen", "anderes", "anderem", "andere",
         "spezifischen", "passenden", "neuen", "restaurant", "museum",
-        "aktivitaet", "aktivitÃ¤t", "vorschlag",
+        "aktivitaet", "aktivität", "vorschlag",
     ]
     is_generic = _is_generic_replacement_text(replacement_text)
 
@@ -777,10 +777,10 @@ def _clean_custom_activity_name(name: str) -> str:
     cleaned = re.sub(r"^ein\s+besuch\s+(des|der|dem|den)?\s*", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"^(der|die|das|dem|den|ein|eine|einem|einen)\s+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+fuer\s+.+$", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s+fÃ¼r\s+.+$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+für\s+.+$", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+oder\s+(des|der|dem|den)?\s*", " und ", cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.replace("Kurfuerstendamms", "Kurfuerstendamm")
-    cleaned = cleaned.replace("KurfÃ¼rstendamms", "KurfÃ¼rstendamm")
+    cleaned = cleaned.replace("Kurfürstendamms", "Kurfürstendamm")
     cleaned = cleaned.replace("Friedrichshains", "Friedrichshain")
     if not cleaned:
         return "Alternative Aktivitaet"
@@ -1082,10 +1082,10 @@ def _find_slot_for_change(active_plan: dict, message: str):
 def _extract_activity_name_from_message(message: str) -> str:
     text = message.strip()
     patterns = [
-        r"(?:loesche|lÃ¶sche|losche|entferne)\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
+        r"(?:loesche|lösche|losche|entferne)\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
         r"(?:verschiebe|setze)\s+(.+?)\s+(?:auf|von|um)\s+",
         r"aktivitaet\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
-        r"aktivitÃ¤t\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
+        r"aktivität\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -1189,7 +1189,7 @@ def _chat_change_reply(message: str, changed: bool, calendar_result: dict | None
         if calendar_result.get("updated"):
             message += "\nDer Reiseplan und Kalender wurden aktualisiert."
         else:
-            message += "\nPlan geÃ¤ndert, Kalender konnte nicht aktualisiert werden."
+            message += "\nPlan geändert, Kalender konnte nicht aktualisiert werden."
 
     return {
         "message": message,
@@ -1255,16 +1255,16 @@ def _rule_based_response(trip: dict, message: str) -> dict:
                 for d in active_plan["days"]
                 if d.get("weather")
             ]
-            reply = "WetterÃ¼bersicht: " + ", ".join(conditions) if conditions else "Keine Wetterdaten verfÃ¼gbar."
+            reply = "Wetterübersicht: " + ", ".join(conditions) if conditions else "Keine Wetterdaten verfügbar."
         else:
             reply = "Kein aktiver Plan gefunden."
 
-    elif any(kw in msg_lower for kw in ["aktivitÃ¤t", "aktivitaet", "programm", "was machen", "highlights"]):
+    elif any(kw in msg_lower for kw in ["aktivität", "aktivitaet", "programm", "was machen", "highlights"]):
         if active_plan:
             day1 = active_plan["days"][0] if active_plan["days"] else None
             if day1:
                 acts = [slot["activity"]["name"] for slot in day1.get("time_slots", [])]
-                reply = f"Highlights an Tag 1: {', '.join(acts)}." if acts else "Keine AktivitÃ¤ten geplant."
+                reply = f"Highlights an Tag 1: {', '.join(acts)}." if acts else "Keine Aktivitäten geplant."
             else:
                 reply = "Plan ist leer."
         else:
@@ -1278,7 +1278,7 @@ def _rule_based_response(trip: dict, message: str) -> dict:
         dest = trip.get("request", {}).get("destination", "deinem Reiseziel")
         reply = (
             f"Ich helfe dir gerne mit deiner Reise nach {dest}! "
-            f"Du kannst mich nach Budget, Wetter, AktivitÃ¤ten oder Reisetipps fragen."
+            f"Du kannst mich nach Budget, Wetter, Aktivitäten oder Reisetipps fragen."
         )
 
     return {
