@@ -66,7 +66,6 @@ Reisedaten gingen bei jedem Server-Neustart verloren, weil sie nur im Arbeitsspe
 - **Persistenz:** Trips überleben Server-Neustarts
 - **Monitoring-Stabilität:** Der Hintergrund-Thread findet nach einem Neustart alle aktiven Reisen wieder
 - **Prozess-Trennung:** Streamlit und FastAPI teilen jetzt dieselbe `trips.db`-Datei statt isolierter In-Memory-Dicts
-- **Fundament für Phase 1:** LangGraph benötigt persistenten Zustand — SQLite ist die natürliche Grundlage
 
 ### Implementation & Impact
 Interface von `store.py` ist identisch geblieben (gleiche vier Funktionen: `create_trip`, `get_trip`, `update_trip`, `list_trips`). Dadurch mussten `monitoring.py` und alle Agenten nicht angepasst werden. Der einzige Breaking Point war der direkte Dict-Zugriff `store.trips.values()` in `main.py`, der explizit ersetzt wurde.
