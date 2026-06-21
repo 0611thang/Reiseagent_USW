@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 
 from providers.weather import get_weather_for_trip
+from providers.flights import get_flight_status_for_trip
 import providers.places as places_provider
 from providers.calendar import sync_changed_days_to_calendar, sync_full_plan_to_calendar
 from providers.telegram import send_plan_update
@@ -41,6 +42,30 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
     })
 
     days = planning.create_plan(request, all_activities, weather)
+
+    flight_updates = None
+    if request.get("flight_number"):
+        flight_updates = get_flight_status_for_trip(request)
+        if flight_updates.get("found"):
+            adjusted = _adjust_first_day_for_flight(days, flight_updates)
+            source = flight_updates.get("source", "unbekannt")
+            summary = f"Flugdaten geladen ({source})."
+            if adjusted:
+                summary += " Tag 1 wurde an die Ankunftszeit angepasst."
+            insights.append({
+                "agent_name": "flight_agent",
+                "display_label": "Flug Agent",
+                "status": "completed",
+                "summary": summary,
+            })
+        else:
+            insights.append({
+                "agent_name": "flight_agent",
+                "display_label": "Flug Agent",
+                "status": "warning",
+                "summary": flight_updates.get("message", "Keine Flugdaten gefunden."),
+            })
+
     insights.append(planning.get_agent_insight(len(days)))
 
     total_activities = sum(len(d["time_slots"]) for d in days)
@@ -74,7 +99,102 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
         "agent_insights": insights,
         "weather": weather,
         "all_activities": all_activities,
+        "flight_updates": flight_updates,
     }
+
+
+def _flight_arrival_time(flight_updates: dict) -> str | None:
+    fields = ["actual_arrival", "estimated_arrival", "scheduled_arrival"]
+    try:
+        delay = int(float(flight_updates.get("arrival_delay_minutes") or flight_updates.get("delay_minutes") or 0))
+    except (TypeError, ValueError):
+        delay = 0
+    if str(flight_updates.get("source", "")).startswith("mock") and delay >= 30:
+        fields = ["scheduled_arrival", "estimated_arrival", "actual_arrival"]
+
+    for field in fields:
+        value = flight_updates.get(field)
+        if not value:
+            continue
+        text = str(value)
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return parsed.strftime("%H:%M")
+        except ValueError:
+            match = re.search(r"(\d{1,2}):(\d{2})", text)
+            if match:
+                return _format_time(match.group(1), match.group(2))
+    return None
+
+
+def _flight_activity(name: str, description: str) -> dict:
+    return {
+        "id": f"flight-{uuid.uuid4()}",
+        "name": name,
+        "category": "transport",
+        "description": description,
+        "location": {"name": name, "area": "Flughafen", "lat": None, "lng": None},
+        "estimated_cost_per_person": 0.0,
+        "estimated_cost_total": 0.0,
+        "duration_minutes": 60,
+        "indoor_outdoor": "indoor",
+        "tags": ["flug", "ankunft"],
+        "reasoning": "Zeitlicher Startpunkt durch Flugankunft.",
+        "source": "flight",
+    }
+
+
+def _adjust_first_day_for_flight(days: list, flight_updates: dict) -> bool:
+    if not days:
+        return False
+
+    arrival_time = _flight_arrival_time(flight_updates)
+    if not arrival_time:
+        return False
+
+    first_day = next((day for day in days if day.get("day_number") == 1), None)
+    if not first_day:
+        return False
+
+    arrival_minutes = _time_to_minutes(arrival_time)
+    check_in_start = arrival_minutes + 75
+    check_in_end = check_in_start + 60
+
+    existing_slots = first_day.get("time_slots", [])
+    later_slots = [
+        slot for slot in existing_slots
+        if _time_to_minutes(slot.get("start_time", "00:00")) >= check_in_end
+    ]
+
+    flight_number = flight_updates.get("flight_number", "Flug")
+    arrival_end = min(arrival_minutes + 60, 23 * 60 + 59)
+    new_slots = [{
+        "id": str(uuid.uuid4()),
+        "start_time": arrival_time,
+        "end_time": _minutes_to_time(arrival_end),
+        "activity": _flight_activity(
+            f"Ankunft mit {flight_number}",
+            "Ankunft am Flughafen und Orientierung nach der Landung.",
+        ),
+        "notes": "Aus Flugdaten übernommen",
+    }]
+
+    if check_in_start <= 22 * 60:
+        new_slots.append({
+            "id": str(uuid.uuid4()),
+            "start_time": _minutes_to_time(check_in_start),
+            "end_time": _minutes_to_time(min(check_in_end, 23 * 60 + 59)),
+            "activity": _flight_activity(
+                "Transfer und Hotel Check-in",
+                "Puffer für Gepäck, Transfer und Ankunft im Hotel.",
+            ),
+            "notes": "75 Minuten Puffer nach Flugankunft",
+        })
+
+    first_day["time_slots"] = new_slots + later_slots
+    first_day["time_slots"].sort(key=lambda slot: _time_to_minutes(slot["start_time"]))
+    first_day["title"] = "Ankunft & erster Abend"
+    return True
 
 
 def handle_chat_message(trip: dict, message: str) -> dict:
@@ -936,6 +1056,8 @@ def _change_time_from_chat(trip: dict, message: str) -> dict:
     new_start, new_end = _extract_time_range(message, slot)
     if not new_start:
         return _chat_change_reply("Ich konnte die neue Uhrzeit nicht erkennen.", False)
+    if _time_to_minutes(new_end) <= _time_to_minutes(new_start):
+        return _chat_change_reply("Die Endzeit muss nach der Startzeit liegen.", False)
 
     old_start = slot.get("start_time", "")
     if new_start == old_start:

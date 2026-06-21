@@ -150,6 +150,8 @@ def create_demo_trip():
 @app.post("/api/trips/plan")
 def plan_trip(body: TripRequestBody):
     request = body.model_dump()
+    if not request.get("flight_number"):
+        request["flight_number"] = os.getenv("FLIGHT_NUMBER", "").strip() or None
     return _create_trip(request)
 
 
@@ -165,6 +167,7 @@ def _create_trip(request: dict, use_mock_weather: bool = False) -> dict:
         "active_plan": result["active_plan"],
         "checklist": checklist_data,
         "agent_insights": result["agent_insights"],
+        "flight_updates": result.get("flight_updates"),
     })
 
     calendar_result = sync_full_plan_to_calendar(result["active_plan"])

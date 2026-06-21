@@ -1,6 +1,6 @@
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, time as datetime_time
 sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
@@ -536,6 +536,87 @@ def render_middle_col(plan: dict):
     st.markdown(html, unsafe_allow_html=True)
 
 
+def _flight_airport_label(value) -> str:
+    if isinstance(value, dict):
+        name = value.get("name") or ""
+        code = value.get("iata") or value.get("icao") or ""
+        if name and code:
+            return f"{name} ({code})"
+        return name or code or "Nicht verfügbar"
+    return str(value or "Nicht verfügbar")
+
+
+def _flight_time_label(value) -> str:
+    if not value:
+        return "Nicht verfügbar"
+    text = str(value)
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%H:%M")
+    except ValueError:
+        return text
+
+
+def render_flight_panel(trip: dict):
+    request = trip.get("request", {})
+    flight_number = request.get("flight_number")
+    if not flight_number:
+        return
+
+    details = trip.get("flight_updates") or {}
+    number = details.get("flight_number") or flight_number
+    origin = _flight_airport_label(details.get("origin_airport"))
+    destination = _flight_airport_label(details.get("destination_airport"))
+    scheduled = _flight_time_label(details.get("scheduled_arrival"))
+    current = _flight_time_label(details.get("actual_arrival") or details.get("estimated_arrival"))
+    raw_status = str(details.get("status") or "unknown").lower()
+    status_labels = {
+        "scheduled": "Planmäßig",
+        "active": "Unterwegs",
+        "landed": "Gelandet",
+        "delayed": "Verspätet",
+        "cancelled": "Gestrichen",
+        "canceled": "Gestrichen",
+        "diverted": "Umgeleitet",
+        "unknown": "Unbekannt",
+    }
+    status = status_labels.get(raw_status, raw_status.capitalize())
+    try:
+        delay = int(float(details.get("arrival_delay_minutes") or details.get("delay_minutes") or 0))
+    except (TypeError, ValueError):
+        delay = 0
+    if delay > 0 and raw_status in ["scheduled", "delayed"]:
+        status = f"Verspätet ({delay} Min.)"
+
+    source = str(details.get("source", ""))
+    simulation = ""
+    if source.startswith("mock"):
+        simulation = '<div style="margin-top:8px;color:#92400e;font-size:12px;">Flugmonitoring simuliert</div>'
+
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="card-title">Flug { _esc(number) }</div>
+            <div style="font-size:13px;color:#374151;line-height:1.7;">
+                <strong>Route:</strong> {_esc(origin)} &rarr; {_esc(destination)}<br>
+                <strong>Geplante Ankunft:</strong> {_esc(scheduled)} &nbsp;|&nbsp;
+                <strong>Aktuelle Ankunft:</strong> {_esc(current)}<br>
+                <strong>Status:</strong> {_esc(status)}
+            </div>
+            {simulation}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _time_input_value(value: str) -> datetime_time:
+    try:
+        hour, minute = value.split(":")
+        return datetime_time(int(hour), int(minute))
+    except (AttributeError, TypeError, ValueError):
+        return datetime_time(9, 0)
+
+
 def render_plan_actions(trip: dict):
     plan = trip.get("active_plan", {})
     days = plan.get("days", [])
@@ -543,6 +624,64 @@ def render_plan_actions(trip: dict):
         return
 
     with st.expander("Plan schnell bearbeiten"):
+        day_numbers = [day.get("day_number") for day in days]
+        selected_day_number = st.selectbox(
+            "Tag auswählen",
+            day_numbers,
+            format_func=lambda number: f"Tag {number}",
+            key="edit_plan_day",
+        )
+        selected_day = next(day for day in days if day.get("day_number") == selected_day_number)
+        slots = selected_day.get("time_slots", [])
+
+        if slots:
+            slot_ids = [slot.get("id") for slot in slots]
+            selected_slot_id = st.selectbox(
+                "Aktivität auswählen",
+                slot_ids,
+                format_func=lambda slot_id: next(
+                    f"{slot.get('start_time')} - {slot.get('activity', {}).get('name', 'Aktivität')}"
+                    for slot in slots if slot.get("id") == slot_id
+                ),
+                key="edit_plan_activity",
+            )
+            selected_slot = next(slot for slot in slots if slot.get("id") == selected_slot_id)
+            activity_name = selected_slot.get("activity", {}).get("name", "Aktivität")
+
+            time_cols = st.columns(2)
+            with time_cols[0]:
+                new_start = st.time_input(
+                    "Neue Startzeit",
+                    value=_time_input_value(selected_slot.get("start_time", "09:00")),
+                    step=900,
+                    key=f"edit_start_{selected_slot_id}",
+                )
+            with time_cols[1]:
+                new_end = st.time_input(
+                    "Neue Endzeit",
+                    value=_time_input_value(selected_slot.get("end_time", "10:30")),
+                    step=900,
+                    key=f"edit_end_{selected_slot_id}",
+                )
+
+            if st.button("Uhrzeit übernehmen", type="primary", use_container_width=True):
+                start_text = new_start.strftime("%H:%M")
+                end_text = new_end.strftime("%H:%M")
+                prompt = (
+                    f"plane {activity_name} von {start_text} bis {end_text} Uhr "
+                    f"an Tag {selected_day_number}"
+                )
+                result = _send_chat_command_from_ui(trip, prompt)
+                status = result.get("agent_insights", [{}])[0].get("status")
+                if status == "completed":
+                    if "Kalender konnte nicht aktualisiert werden" in result.get("message", ""):
+                        add_status("Uhrzeit übernommen, Kalender konnte nicht aktualisiert werden.")
+                    else:
+                        add_status("Uhrzeit übernommen und Kalender synchronisiert.")
+                else:
+                    add_status(result.get("message", "Uhrzeit konnte nicht geändert werden."))
+                st.rerun()
+
         for day in days:
             st.caption(_format_day_label(day))
             for slot in day.get("time_slots", []):
@@ -585,6 +724,7 @@ def _send_chat_command_from_ui(trip: dict, prompt: str):
         "last_suggestions": trip.get("last_suggestions", []),
         "last_suggestion_context": trip.get("last_suggestion_context", {}),
     })
+    return result
 
 
 def render_right_col(plan: dict):
@@ -866,6 +1006,7 @@ def main():
                 )
                 flight_number = st.text_input(
                     "Flugnummer optional",
+                    value=os.getenv("FLIGHT_NUMBER", ""),
                     placeholder="z. B. LH400"
                 )
             if st.form_submit_button("Reise planen", type="primary"):
@@ -888,6 +1029,7 @@ def main():
                         "active_plan": result["active_plan"],
                         "checklist": cl,
                         "agent_insights": result["agent_insights"],
+                        "flight_updates": result.get("flight_updates"),
                     })
                     sync_plan_and_notify(result["active_plan"], "Plan erstellt")
                     st.session_state.trip_id = trip_obj["id"]
@@ -909,6 +1051,8 @@ def main():
     if not active_plan:
         st.warning("Kein aktiver Reiseplan gefunden.")
         return
+
+    render_flight_panel(trip)
 
     # ── Three-column layout: 25% · 45% · 30% ────────────────────────────────
     col_chat, col_plan, col_budget = st.columns([1, 1.8, 1.2])

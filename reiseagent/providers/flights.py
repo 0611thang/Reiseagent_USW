@@ -12,23 +12,25 @@ def _now_iso() -> str:
 
 
 def _mock_flight_updates(request: dict) -> dict:
-    origin_airport = request.get("origin_airport") or request.get("from_airport") or "BER"
-    destination_airport = request.get("destination_airport") or request.get("to_airport") or "JFK"
+    origin_airport = request.get("origin_airport") or request.get("from_airport")
+    destination_airport = request.get("destination_airport") or request.get("to_airport")
     flight_number = request.get("flight_number") or "MOCK123"
 
-    departure_date = request.get("departure_date")
+    flight_date = request.get("departure_date") or (datetime.now() + timedelta(days=1)).date().isoformat()
+    arrival_time = os.getenv("MOCK_FLIGHT_ARRIVAL_TIME", "12:45").strip() or "12:45"
+    try:
+        arrival = datetime.fromisoformat(f"{flight_date}T{arrival_time}:00")
+    except ValueError:
+        arrival = datetime.fromisoformat(f"{flight_date}T12:45:00")
 
-    if departure_date:
-        scheduled_departure = f"{departure_date}T09:30:00"
-        scheduled_arrival = f"{departure_date}T12:45:00"
-    else:
-        departure = datetime.now() + timedelta(days=1, hours=2)
-        arrival = departure + timedelta(hours=3, minutes=15)
+    departure = arrival - timedelta(hours=3, minutes=15)
+    scheduled_departure = departure.isoformat(timespec="seconds")
+    scheduled_arrival = arrival.isoformat(timespec="seconds")
 
-        scheduled_departure = departure.isoformat(timespec="seconds")
-        scheduled_arrival = arrival.isoformat(timespec="seconds")
-
-    delay_minutes = int(os.getenv("MOCK_FLIGHT_DELAY_MINUTES", "0"))
+    try:
+        delay_minutes = int(os.getenv("MOCK_FLIGHT_DELAY_MINUTES", "0"))
+    except ValueError:
+        delay_minutes = 0
 
     estimated_departure = scheduled_departure
     estimated_arrival = scheduled_arrival

@@ -206,7 +206,7 @@ def _extract_delay_minutes(flight_updates: dict) -> int:
         return max(delays)
 
     status = str(flight_updates.get("status", "")).lower()
-    if status in {"delayed", "diverted"}:
+    if status in {"delayed", "diverted", "cancelled", "canceled"}:
         return FLIGHT_DELAY_THRESHOLD_MINUTES
 
     return 0
