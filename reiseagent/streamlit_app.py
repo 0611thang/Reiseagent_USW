@@ -864,6 +864,10 @@ def main():
                     ["Museen", "gutes Essen", "Sehenswürdigkeiten", "Spaziergänge", "Natur", "Shopping"],
                     default=["Sehenswürdigkeiten", "gutes Essen"],
                 )
+                flight_number = st.text_input(
+                    "Flugnummer optional",
+                    placeholder="z. B. LH400"
+                )
             if st.form_submit_button("Reise planen", type="primary"):
                 req = {
                     "destination": dest,
@@ -873,6 +877,7 @@ def main():
                     "number_of_people": ppl,
                     "travel_type": ttype,
                     "interests": ints or ["Sehenswürdigkeiten"],
+                    "flight_number": flight_number.strip() or None,
                 }
                 with st.spinner("Plane Reise..."):
                     trip_obj = store.create_trip(req)

@@ -93,3 +93,78 @@ Interface von `store.py` ist identisch geblieben (gleiche vier Funktionen: `crea
 curl http://localhost:8000/api/trips/756b2b1b-3014-4e59-9593-fc5b3d67fa82
 ```
 → Trip muss nach dem Neustart noch vollständig zurückkommen.
+
+## Changelog – Flugzeiten-Monitoring & Verspätungs-Replanning
+
+**Datum & Uhrzeit:** 2026-06-21
+**Autor:** Suhaib
+
+- Weboberfläche erweitert:
+    - Ein neues Eingabefeld für die Flugnummer wurde im Reiseplanungsformular hinzugefügt.
+    - Die eingegebene Flugnummer wird zusammen mit den Reisedaten an das Backend gesendet und im Trip gespeichert.
+
+- Flight-Provider erweitert:
+    - `providers/flights.py` wurde ergänzt bzw. korrigiert.
+    - Die Flugzeiten-API kann über `FLIGHT_API_URL` und `FLIGHT_API_KEY` aus der `.env` Datei konfiguriert werden.
+    - Flugnummern werden normalisiert, z. B. `LH 1961` zu `LH1961`.
+    - Es wurde ein Mock-Modus über `MOCK_FLIGHT_DELAY_MINUTES` eingebaut, um Flugverspätungen für Tests zu simulieren.
+    - Die Rückgabe enthält jetzt Felder wie `delay_minutes`, `departure_delay_minutes`, `arrival_delay_minutes`, `scheduled_departure` und `estimated_departure`.
+
+- Environment-Konfiguration ergänzt:
+    - Neue `.env` Variablen eingeführt:
+        - `FLIGHT_API_URL`
+        - `FLIGHT_API_KEY`
+        - `FLIGHT_API_AUTH_MODE`
+        - `MONITORING_INTERVAL_SECONDS`
+        - `MOCK_FLIGHT_DELAY_MINUTES`
+    - Dadurch können echte API-Daten oder Mock-Daten für Demo-Tests verwendet werden.
+
+- Monitoring-Agent erweitert:
+    - Der Monitoring-Agent prüft nun regelmäßig die gespeicherte Flugnummer eines Trips.
+    - Die Flugzeiten werden im Hintergrund über die Flight-API aktualisiert.
+    - Das Monitoring läuft konfigurierbar alle 30 Minuten über `MONITORING_INTERVAL_SECONDS`.
+    - Eine Verspätung wird erkannt, wenn `delay_minutes` mindestens 30 Minuten beträgt.
+    - Die letzten Flugupdates werden im Trip gespeichert.
+
+- Store/Trip-Daten erweitert:
+    - Trips speichern nun zusätzliche Felder:
+        - `flight_updates`
+        - `last_flight_update`
+        - `last_notified_flight_delay_minutes`
+    - Dadurch kann nachvollzogen werden, wann der Flug zuletzt geprüft wurde und ob eine Verspätung bereits gemeldet wurde.
+
+- Replanning bei Flugverspätung ergänzt:
+    - Bei erkannter Flugverspätung wird automatisch ein neuer Reiseplan-Vorschlag erstellt.
+    - Der erste Reisetag wird zeitlich an die Verspätung angepasst.
+    - Der neue Vorschlag enthält:
+        - Grund der Änderung
+        - betroffene Tage
+        - konkrete Änderungen im Tagesplan
+        - Budget vor der Änderung
+        - Budget nach der Änderung
+        - Preisdifferenz zwischen altem und neuem Plan
+
+- Telegram-Integration erweitert:
+    - Bei einer relevanten Flugverspätung sendet der Reiseagent automatisch eine Telegram-Nachricht an den Nutzer.
+    - Die Nachricht enthält:
+        - Flugnummer
+        - Reiseziel
+        - Verspätung in Minuten
+        - Preis des alten Plans
+        - Preis des neuen Plans
+        - Preisdifferenz
+    - Inline-Buttons wurden ergänzt:
+        - „Neuen Plan annehmen“
+        - „Ablehnen“
+
+- Telegram-Callback-Verarbeitung ergänzt:
+    - Das Backend kann nun Telegram-Button-Klicks abfragen.
+    - Wenn der Nutzer den neuen Plan akzeptiert, wird der vorgeschlagene Plan als aktiver Reiseplan übernommen.
+    - Wenn der Nutzer ablehnt, wird der Vorschlag als abgelehnt markiert.
+    - Bereits bearbeitete Vorschläge werden nicht erneut verarbeitet.
+
+- Testbarkeit verbessert:
+    - Manuelles Monitoring ist über Swagger/FastAPI testbar.
+    - Mit `MOCK_FLIGHT_DELAY_MINUTES=60` kann eine Flugverspätung simuliert werden.
+    - Dadurch kann der komplette Ablauf getestet werden:
+      Flugnummer eingeben → Monitoring auslösen → Verspätung erkennen → neuen Plan erstellen → Telegram-Nachricht senden → Plan akzeptieren oder ablehnen.

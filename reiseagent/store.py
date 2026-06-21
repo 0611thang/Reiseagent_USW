@@ -34,6 +34,7 @@ def create_trip(request: dict) -> dict:
         "flight_updates": None,
         "last_weather_update": None,
         "last_flight_update": None,
+        "last_notified_flight_delay_minutes": 0,
     }
 
     conn = _get_conn()

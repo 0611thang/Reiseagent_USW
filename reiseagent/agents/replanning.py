@@ -121,3 +121,102 @@ def get_agent_insight(n_changes: int) -> dict:
         "status": "completed",
         "summary": f"{n_changes} Aktivität(en) durch wettergeeignete Alternativen ersetzt (Vorschlag).",
     }
+
+def _shift_time(time_str: str, minutes: int) -> str:
+    hour, minute = map(int, time_str.split(":"))
+    total = hour * 60 + minute + minutes
+
+    # Nicht über 23:59 hinausgehen
+    total = min(total, 23 * 60 + 59)
+
+    new_hour = total // 60
+    new_minute = total % 60
+
+    return f"{new_hour:02d}:{new_minute:02d}"
+
+
+def create_flight_delay_proposal(trip: dict, flight_updates: dict, delay_minutes: int) -> dict:
+    """
+    Erstellt einen Neuplanungsvorschlag bei Flugverspätung.
+
+    Idee:
+    - Wenn der Flug verspätet ist, wird der erste Reisetag zeitlich nach hinten verschoben.
+    - Budget vorher/nachher wird verglichen.
+    - Der Proposal-Flow bleibt derselbe wie bei Wetter-Proposals.
+    """
+    active_plan = trip.get("active_plan")
+    if not active_plan:
+        raise ValueError("Kein aktiver Plan vorhanden.")
+
+    request = trip["request"]
+
+    proposed_plan = copy.deepcopy(active_plan)
+    proposed_plan["id"] = str(uuid.uuid4())
+    proposed_plan["status"] = "proposal_pending"
+    proposed_plan["updated_at"] = datetime.now().isoformat()
+
+    affected_day = None
+    for day in proposed_plan.get("days", []):
+        if day.get("day_number") == 1:
+            affected_day = day
+            break
+
+    if not affected_day:
+        raise ValueError("Tag 1 nicht im Plan gefunden.")
+
+    changes = []
+
+    for slot in affected_day.get("time_slots", []):
+        old_start = slot.get("start_time")
+        old_end = slot.get("end_time")
+        activity = slot.get("activity", {})
+
+        if not old_start or not old_end:
+            continue
+
+        new_start = _shift_time(old_start, delay_minutes)
+        new_end = _shift_time(old_end, delay_minutes)
+
+        slot["start_time"] = new_start
+        slot["end_time"] = new_end
+
+        changes.append({
+            "type": "shift_time",
+            "day_number": 1,
+            "activity_id": activity.get("id"),
+            "activity_name": activity.get("name"),
+            "explanation": (
+                f"'{activity.get('name', 'Aktivität')}' wurde wegen Flugverspätung "
+                f"von {old_start}-{old_end} auf {new_start}-{new_end} verschoben."
+            ),
+            "time_delta_minutes": delay_minutes,
+            "cost_delta": 0,
+        })
+
+    budget_before = active_plan.get("budget_summary", {})
+    budget_after = calculate_budget(proposed_plan.get("days", []), request)
+    proposed_plan["budget_summary"] = budget_after
+
+    flight_number = request.get("flight_number") or flight_updates.get("flight_number") or "unbekannter Flug"
+
+    proposal = {
+        "id": str(uuid.uuid4()),
+        "plan_id": active_plan["id"],
+        "reason": (
+            f"Flugverspätung bei {flight_number}: "
+            f"{delay_minutes} Minuten Verspätung. "
+            "Der erste Reisetag sollte angepasst werden."
+        ),
+        "affected_day_numbers": [1],
+        "changes": changes,
+        "proposed_plan": proposed_plan,
+        "budget_before": budget_before,
+        "budget_after": budget_after,
+        "status": "pending",
+        "created_at": datetime.now().isoformat(),
+        "trigger": "flight_delay",
+        "flight_updates": flight_updates,
+        "delay_minutes": delay_minutes,
+    }
+
+    return proposal

@@ -28,18 +28,35 @@ def _mock_flight_updates(request: dict) -> dict:
         scheduled_departure = departure.isoformat(timespec="seconds")
         scheduled_arrival = arrival.isoformat(timespec="seconds")
 
+    delay_minutes = int(os.getenv("MOCK_FLIGHT_DELAY_MINUTES", "0"))
+
+    estimated_departure = scheduled_departure
+    estimated_arrival = scheduled_arrival
+
+    if delay_minutes > 0:
+        estimated_departure = (
+                datetime.fromisoformat(scheduled_departure) + timedelta(minutes=delay_minutes)
+        ).isoformat(timespec="seconds")
+
+        estimated_arrival = (
+                datetime.fromisoformat(scheduled_arrival) + timedelta(minutes=delay_minutes)
+        ).isoformat(timespec="seconds")
+
     return {
         "source": "mock",
         "checked_at": _now_iso(),
+        "found": True,
         "flight_number": flight_number,
-        "status": "scheduled",
+        "status": "delayed" if delay_minutes > 0 else "scheduled",
         "origin_airport": origin_airport,
         "destination_airport": destination_airport,
         "scheduled_departure": scheduled_departure,
-        "estimated_departure": scheduled_departure,
+        "estimated_departure": estimated_departure,
         "scheduled_arrival": scheduled_arrival,
-        "estimated_arrival": scheduled_arrival,
-        "delay_minutes": 0,
+        "estimated_arrival": estimated_arrival,
+        "delay_minutes": delay_minutes,
+        "departure_delay_minutes": delay_minutes,
+        "arrival_delay_minutes": delay_minutes,
         "gate": None,
         "terminal": None,
         "message": "Mock-Flugdaten verwendet.",
@@ -57,7 +74,7 @@ def _build_aviationstack_params(request: dict) -> dict:
     departure_date = request.get("departure_date")
 
     if flight_number:
-        params["flight_iata"] = flight_number
+        params["flight_iata"] = str(flight_number).replace(" ", "").upper()
 
     if origin_airport:
         params["dep_iata"] = origin_airport
@@ -76,6 +93,7 @@ def _normalize_aviationstack_response(data: dict, request: dict) -> dict:
         return {
             "source": "api_error",
             "checked_at": _now_iso(),
+            "found": False,
             "error": data["error"],
             "message": "Aviationstack hat einen Fehler zurückgegeben.",
         }
@@ -103,6 +121,9 @@ def _normalize_aviationstack_response(data: dict, request: dict) -> dict:
     arrival = item.get("arrival") or {}
     airline = item.get("airline") or {}
     aircraft = item.get("aircraft") or {}
+
+    departure_delay = departure.get("delay") or 0
+    arrival_delay = arrival.get("delay") or 0
 
     return {
         "source": "aviationstack",
@@ -145,12 +166,17 @@ def _normalize_aviationstack_response(data: dict, request: dict) -> dict:
         "scheduled_departure": departure.get("scheduled"),
         "estimated_departure": departure.get("estimated"),
         "actual_departure": departure.get("actual"),
-        "departure_delay_minutes": departure.get("delay"),
+        "departure_delay_minutes": departure_delay,
 
         "scheduled_arrival": arrival.get("scheduled"),
         "estimated_arrival": arrival.get("estimated"),
         "actual_arrival": arrival.get("actual"),
-        "arrival_delay_minutes": arrival.get("delay"),
+        "arrival_delay_minutes": arrival_delay,
+
+        "delay_minutes": max(
+            int(departure_delay or 0),
+            int(arrival_delay or 0),
+        ),
 
         "aircraft": {
             "registration": aircraft.get("registration"),

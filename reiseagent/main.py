@@ -23,7 +23,12 @@ from agents.suggestion_agent import create_replacement_suggestion, create_sugges
 from providers.places import get_places
 from providers.weather import get_weather_for_trip
 from providers.navigation import get_route, get_both_routes
-from providers.telegram import send_navigation_reminder, send_plan_update
+from providers.telegram import (
+    send_navigation_reminder,
+    send_plan_update,
+    get_callback_updates,
+    answer_callback_query,
+)
 from providers.calendar import create_calendar_event, sync_full_plan_to_calendar
 import profile_store
 
@@ -68,6 +73,10 @@ def start_background_threads():
     nav_thread = threading.Thread(target=_navigation_reminder_loop, daemon=True)
     nav_thread.start()
     print("[navigation_reminder] Automatische Erinnerungen gestartet.")
+
+    telegram_thread = threading.Thread(target=_telegram_callback_loop, daemon=True)
+    telegram_thread.start()
+    print("[telegram_callback] Telegram Proposal Buttons gestartet.")
 
 
 class TripRequestBody(BaseModel):
@@ -114,6 +123,7 @@ def _build_trip_response(trip: dict) -> dict:
         "flight_updates": trip.get("flight_updates"),
         "last_weather_update": trip.get("last_weather_update"),
         "last_flight_update": trip.get("last_flight_update"),
+        "last_notified_flight_delay_minutes": trip.get("last_notified_flight_delay_minutes", 0),
     }
 
 
@@ -387,6 +397,88 @@ def run_monitoring_for_trip(trip_id: str):
 @app.post("/api/monitoring/run")
 def run_monitoring_now():
     return monitoring.monitor_all_active_trips()
+
+_telegram_update_offset = None
+
+
+def _handle_telegram_proposal_decision(action: str, trip_id: str, proposal_id: str) -> str:
+    trip = store.get_trip(trip_id)
+
+    if not trip:
+        return "Trip nicht gefunden."
+
+    proposal = next((p for p in trip.get("proposals", []) if p.get("id") == proposal_id), None)
+
+    if not proposal:
+        return "Vorschlag nicht gefunden."
+
+    if proposal.get("status") != "pending":
+        return "Dieser Vorschlag wurde bereits bearbeitet."
+
+    if action == "accept":
+        proposal["status"] = "accepted"
+
+        new_plan = proposal["proposed_plan"]
+        new_plan["status"] = "active"
+
+        store.update_trip(trip_id, {
+            "active_plan": new_plan,
+            "proposals": trip["proposals"],
+        })
+
+        calendar_result = sync_full_plan_to_calendar(new_plan)
+        send_plan_update(new_plan, calendar_synced=calendar_result.get("updated", False))
+
+        return "Neuer Reiseplan wurde angenommen."
+
+    if action == "reject":
+        proposal["status"] = "rejected"
+        store.update_trip(trip_id, {"proposals": trip["proposals"]})
+
+        return "Neuer Reiseplan wurde abgelehnt."
+
+    return "Unbekannte Aktion."
+
+
+def _telegram_callback_loop():
+    global _telegram_update_offset
+
+    while True:
+        try:
+            updates = get_callback_updates(offset=_telegram_update_offset)
+
+            for update in updates.get("result", []):
+                _telegram_update_offset = update["update_id"] + 1
+
+                callback = update.get("callback_query")
+                if not callback:
+                    continue
+
+                data = callback.get("data", "")
+                callback_id = callback.get("id")
+
+                parts = data.split(":")
+                if len(parts) != 4:
+                    continue
+
+                kind, action, trip_id, proposal_id = parts
+
+                if kind != "proposal":
+                    continue
+
+                message = _handle_telegram_proposal_decision(
+                    action,
+                    trip_id,
+                    proposal_id,
+                )
+
+                if callback_id:
+                    answer_callback_query(callback_id, message)
+
+        except Exception as exc:
+            print(f"[telegram_callback] Fehler: {exc}")
+
+        time.sleep(5)
 
 
 def _navigation_reminder_loop():

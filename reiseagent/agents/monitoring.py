@@ -8,8 +8,10 @@ import store
 from agents import replanning
 from providers.places import get_places
 from providers.weather import get_weather_for_trip
+from providers.telegram import send_flight_delay_proposal
 
 BAD_WEATHER = {"rain", "storm", "snow"}
+FLIGHT_DELAY_THRESHOLD_MINUTES = 30
 
 
 def _now_iso() -> str:
@@ -175,9 +177,61 @@ def _call_flight_provider(request: dict) -> Any:
 
     return None
 
+def _extract_delay_minutes(flight_updates: dict) -> int:
+    """
+    Liest die Verspätung aus der Flight-API-Antwort.
+
+    Aviationstack liefert meistens:
+    - departure_delay_minutes
+    - arrival_delay_minutes
+    """
+    if not flight_updates:
+        return 0
+
+    possible_values = [
+        flight_updates.get("departure_delay_minutes"),
+        flight_updates.get("arrival_delay_minutes"),
+        flight_updates.get("delay_minutes"),
+    ]
+
+    delays = []
+    for value in possible_values:
+        try:
+            if value is not None:
+                delays.append(int(value))
+        except (TypeError, ValueError):
+            pass
+
+    if delays:
+        return max(delays)
+
+    status = str(flight_updates.get("status", "")).lower()
+    if status in {"delayed", "diverted"}:
+        return FLIGHT_DELAY_THRESHOLD_MINUTES
+
+    return 0
+
+
+def _has_pending_flight_delay_proposal(trip: dict) -> bool:
+    for proposal in trip.get("proposals", []):
+        if proposal.get("status") == "pending" and proposal.get("trigger") == "flight_delay":
+            return True
+
+    return False
+
 
 def _refresh_flights(trip: dict) -> dict[str, Any]:
-    flight_updates = _call_flight_provider(trip.get("request", {}))
+    request = trip.get("request", {})
+
+    if not request.get("flight_number"):
+        return {
+            "updated": False,
+            "reason": "Keine Flugnummer im Trip gespeichert.",
+        }
+
+    old_notified_delay = trip.get("last_notified_flight_delay_minutes", 0) or 0
+
+    flight_updates = _call_flight_provider(request)
 
     if flight_updates is None:
         return {
@@ -185,19 +239,85 @@ def _refresh_flights(trip: dict) -> dict[str, Any]:
             "reason": "Kein providers.flights-Modul oder keine passende Flight-Funktion gefunden.",
         }
 
-    store.update_trip(trip["id"], {
+    delay_minutes = _extract_delay_minutes(flight_updates)
+
+    update_data = {
         "flight_updates": flight_updates,
         "last_flight_update": _now_iso(),
-    })
+    }
 
-    _append_insight(
-        store.get_trip(trip["id"]),
-        "Flugzeiten/Flugstatus automatisch aktualisiert.",
-    )
+    proposals_created = 0
+    telegram_sent = False
+
+    if (
+            delay_minutes >= FLIGHT_DELAY_THRESHOLD_MINUTES
+            and delay_minutes > old_notified_delay
+            and not _has_pending_flight_delay_proposal(trip)
+    ):
+        try:
+            current_trip = store.get_trip(trip["id"])
+
+            proposal = replanning.create_flight_delay_proposal(
+                current_trip,
+                flight_updates,
+                delay_minutes,
+            )
+
+            proposals = current_trip.get("proposals", [])
+            proposals.append(proposal)
+
+            update_data["proposals"] = proposals
+            update_data["last_notified_flight_delay_minutes"] = delay_minutes
+
+            updated_trip = store.update_trip(trip["id"], update_data)
+
+            telegram_sent = send_flight_delay_proposal(
+                updated_trip,
+                proposal,
+                flight_updates,
+            )
+
+            proposals_created = 1
+
+            _append_insight(
+                updated_trip,
+                (
+                    f"Flugverspätung erkannt: {delay_minutes} Minuten. "
+                    "Ein Neuplanungsvorschlag wurde erstellt und per Telegram gesendet."
+                ),
+            )
+
+        except Exception as exc:
+            store.update_trip(trip["id"], update_data)
+            _append_insight(
+                trip,
+                f"Flug-Monitoring konnte keinen Neuplanungsvorschlag erstellen: {exc}",
+                "warning",
+            )
+
+            return {
+                "updated": True,
+                "flight_updates": flight_updates,
+                "delay_minutes": delay_minutes,
+                "proposals_created": 0,
+                "telegram_sent": False,
+                "error": str(exc),
+            }
+
+    else:
+        store.update_trip(trip["id"], update_data)
+
+        _append_insight(
+            store.get_trip(trip["id"]),
+            "Flugzeiten/Flugstatus automatisch aktualisiert.",
+        )
 
     return {
         "updated": True,
         "flight_updates": flight_updates,
+        "delay_minutes": delay_minutes,
+        "proposals_created": proposals_created,
+        "telegram_sent": telegram_sent,
     }
 
 
