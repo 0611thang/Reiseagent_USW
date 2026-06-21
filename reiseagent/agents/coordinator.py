@@ -649,9 +649,9 @@ def _extract_last_assistant_suggestions(trip: dict) -> list[str]:
         suggestions = []
         for line in content.splitlines():
             raw = line.strip()
-            if not re.match(r"^(\d+[\.)]\s+|[-*â€¢]\s+)", raw):
+            if not re.match(r"^(\d+[\.)]\s+|[-*\u2022]\s+)", raw):
                 continue
-            cleaned = re.sub(r"^[-*â€¢]\s*", "", raw)
+            cleaned = re.sub(r"^[-*\u2022]\s*", "", raw)
             cleaned = re.sub(r"^\d+[\.)]\s*", "", cleaned)
             cleaned = cleaned.strip(" -:;")
             if not cleaned:

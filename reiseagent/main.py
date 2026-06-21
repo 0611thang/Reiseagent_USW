@@ -43,6 +43,8 @@ app.add_middleware(
 
 MONITORING_INTERVAL_SECONDS = int(os.getenv("MONITORING_INTERVAL_SECONDS", "1800"))
 _monitoring_thread_started = False
+_navigation_thread_started = False
+_telegram_thread_started = False
 
 
 def _monitoring_loop():
@@ -57,7 +59,7 @@ def _monitoring_loop():
 
 @app.on_event("startup")
 def start_background_threads():
-    global _monitoring_thread_started
+    global _monitoring_thread_started, _navigation_thread_started, _telegram_thread_started
 
     store.init_db()
 
@@ -70,13 +72,17 @@ def start_background_threads():
             f"alle {MONITORING_INTERVAL_SECONDS} Sekunden"
         )
 
-    nav_thread = threading.Thread(target=_navigation_reminder_loop, daemon=True)
-    nav_thread.start()
-    print("[navigation_reminder] Automatische Erinnerungen gestartet.")
+    if not _navigation_thread_started:
+        _navigation_thread_started = True
+        nav_thread = threading.Thread(target=_navigation_reminder_loop, daemon=True)
+        nav_thread.start()
+        print("[navigation_reminder] Automatische Erinnerungen gestartet.")
 
-    telegram_thread = threading.Thread(target=_telegram_callback_loop, daemon=True)
-    telegram_thread.start()
-    print("[telegram_callback] Telegram Proposal Buttons gestartet.")
+    if not _telegram_thread_started:
+        _telegram_thread_started = True
+        telegram_thread = threading.Thread(target=_telegram_callback_loop, daemon=True)
+        telegram_thread.start()
+        print("[telegram_callback] Telegram Proposal Buttons gestartet.")
 
 
 class TripRequestBody(BaseModel):
@@ -401,6 +407,28 @@ def run_monitoring_now():
 _telegram_update_offset = None
 
 
+def _find_telegram_callback(token: str):
+    for trip in store.list_trips():
+        callback = trip.get("telegram_callbacks", {}).get(token)
+        if callback:
+            return callback
+    return None
+
+
+def _remove_telegram_callbacks(trip_id: str, proposal_id: str):
+    trip = store.get_trip(trip_id)
+    if not trip:
+        return
+
+    callbacks = trip.get("telegram_callbacks", {})
+    remaining = {
+        token: data
+        for token, data in callbacks.items()
+        if data.get("proposal_id") != proposal_id
+    }
+    store.update_trip(trip_id, {"telegram_callbacks": remaining})
+
+
 def _handle_telegram_proposal_decision(action: str, trip_id: str, proposal_id: str) -> str:
     trip = store.get_trip(trip_id)
 
@@ -457,20 +485,31 @@ def _telegram_callback_loop():
                 data = callback.get("data", "")
                 callback_id = callback.get("id")
 
-                parts = data.split(":")
-                if len(parts) != 4:
+                parts = data.split(":", 1)
+                if len(parts) != 2:
                     continue
 
-                kind, action, trip_id, proposal_id = parts
-
-                if kind != "proposal":
+                action, token = parts
+                callback_data = _find_telegram_callback(token)
+                if not callback_data:
+                    if callback_id:
+                        answer_callback_query(callback_id, "Dieser Button ist nicht mehr gültig.")
                     continue
+
+                if action != callback_data.get("action"):
+                    if callback_id:
+                        answer_callback_query(callback_id, "Ungültige Aktion.")
+                    continue
+
+                trip_id = callback_data["trip_id"]
+                proposal_id = callback_data["proposal_id"]
 
                 message = _handle_telegram_proposal_decision(
                     action,
                     trip_id,
                     proposal_id,
                 )
+                _remove_telegram_callbacks(trip_id, proposal_id)
 
                 if callback_id:
                     answer_callback_query(callback_id, message)

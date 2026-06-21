@@ -1,8 +1,33 @@
 import os
+import secrets
 import httpx
 from datetime import datetime, timedelta
 
-CHAT_ID = -1003734288144  # Reiseplaner Gruppe
+import store
+
+DEFAULT_CHAT_ID = "-1003734288144"  # Bisherige Reiseplaner-Gruppe
+
+
+def _get_chat_id():
+    return os.getenv("TELEGRAM_CHAT_ID", "").strip() or DEFAULT_CHAT_ID
+
+
+def _create_callback_token(trip: dict, proposal_id: str, action: str) -> str:
+    callbacks = trip.setdefault("telegram_callbacks", {})
+    token = secrets.token_urlsafe(8)
+    while token in callbacks:
+        token = secrets.token_urlsafe(8)
+
+    callbacks[token] = {
+        "action": action,
+        "trip_id": trip["id"],
+        "proposal_id": proposal_id,
+    }
+    return token
+
+
+def _build_callback_data(action: str, token: str) -> str:
+    return f"{action}:{token}"
 
 
 def send_message(text):
@@ -12,9 +37,13 @@ def send_message(text):
         return False
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        response = httpx.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=5.0)
-        return response.json().get("ok", False)
-    except Exception:
+        response = httpx.post(url, json={"chat_id": _get_chat_id(), "text": text}, timeout=5.0)
+        success = response.json().get("ok", False)
+        if not success:
+            print(f"[telegram] Nachricht abgelehnt: HTTP {response.status_code}")
+        return success
+    except Exception as error:
+        print(f"[telegram] Nachricht konnte nicht gesendet werden: {type(error).__name__}")
         return False
 
 
@@ -111,8 +140,16 @@ def send_flight_delay_proposal(trip: dict, proposal: dict, flight_updates: dict)
     if not token:
         return False
 
-    trip_id = trip["id"]
     proposal_id = proposal["id"]
+    accept_token = _create_callback_token(trip, proposal_id, "accept")
+    reject_token = _create_callback_token(trip, proposal_id, "reject")
+    saved_trip = store.update_trip(
+        trip["id"],
+        {"telegram_callbacks": trip["telegram_callbacks"]},
+    )
+    if not saved_trip:
+        print("[telegram] Callback-Tokens konnten nicht gespeichert werden.")
+        return False
 
     request = trip.get("request", {})
     destination = request.get("destination", "deiner Reise")
@@ -144,11 +181,11 @@ def send_flight_delay_proposal(trip: dict, proposal: dict, flight_updates: dict)
             [
                 {
                     "text": "✅ Neuen Plan annehmen",
-                    "callback_data": f"proposal:accept:{trip_id}:{proposal_id}",
+                    "callback_data": _build_callback_data("accept", accept_token),
                 },
                 {
                     "text": "❌ Ablehnen",
-                    "callback_data": f"proposal:reject:{trip_id}:{proposal_id}",
+                    "callback_data": _build_callback_data("reject", reject_token),
                 },
             ]
         ]
@@ -159,14 +196,18 @@ def send_flight_delay_proposal(trip: dict, proposal: dict, flight_updates: dict)
         response = httpx.post(
             url,
             json={
-                "chat_id": CHAT_ID,
+                "chat_id": _get_chat_id(),
                 "text": text,
                 "reply_markup": keyboard,
             },
             timeout=5.0,
         )
-        return response.json().get("ok", False)
-    except Exception:
+        success = response.json().get("ok", False)
+        if not success:
+            print(f"[telegram] Proposal-Nachricht abgelehnt: HTTP {response.status_code}")
+        return success
+    except Exception as error:
+        print(f"[telegram] Proposal-Nachricht fehlgeschlagen: {type(error).__name__}")
         return False
 
 
@@ -193,8 +234,12 @@ def get_callback_updates(offset: int = None) -> dict:
     try:
         url = f"https://api.telegram.org/bot{token}/getUpdates"
         response = httpx.get(url, params=params, timeout=10.0)
-        return response.json()
-    except Exception:
+        data = response.json()
+        if not data.get("ok", False):
+            print(f"[telegram] Callback-Abfrage abgelehnt: HTTP {response.status_code}")
+        return data
+    except Exception as error:
+        print(f"[telegram] Callback-Abfrage fehlgeschlagen: {type(error).__name__}")
         return {
             "ok": False,
             "result": [],
@@ -218,5 +263,6 @@ def answer_callback_query(callback_query_id: str, text: str) -> bool:
             timeout=5.0,
         )
         return response.json().get("ok", False)
-    except Exception:
+    except Exception as error:
+        print(f"[telegram] Callback-Antwort fehlgeschlagen: {type(error).__name__}")
         return False
