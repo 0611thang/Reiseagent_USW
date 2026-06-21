@@ -5,6 +5,136 @@ Sortierung: **neueste Einträge oben**.
 
 ---
 
+## [2026-06-21] Feature: Flugankunft im Reiseplan und UI-Zeitbearbeitung
+
+**Status:** Merged
+**Datum & Uhrzeit:** 2026-06-21 16:08
+**Autor:** Ibrahim Danisman
+**Commit:** `eb76d48`
+
+### Zweck
+Flugdaten sollen bereits bei der Reiseplanung sichtbar sein und den ersten Reisetag sinnvoll beeinflussen. Zusätzlich sollen Nutzer Aktivitätszeiten direkt in Streamlit bearbeiten können.
+
+### Was wurde geändert
+
+**Flugdaten bei der Erstplanung:**
+- `coordinator.py` lädt bei vorhandener Flugnummer direkt Flugdaten über den bestehenden Flight-Provider.
+- Flugnummer und Flugdetails werden als `flight_updates` im Trip gespeichert.
+- Reale Aviationstack-Daten werden bevorzugt; ohne API-Key bleibt der Mock-Fallback aktiv.
+
+**Ankunftsbasierter erster Reisetag:**
+- Verwendete Reihenfolge: tatsächliche, geschätzte, danach geplante Ankunft.
+- Tag 1 beginnt mit Flugankunft sowie einem 75-Minuten-Puffer für Transfer und Hotel-Check-in.
+- Aktivitäten vor der verfügbaren Ankunftszeit werden aus Tag 1 entfernt.
+- Tag 2 und spätere Tage behalten ihre normalen Startzeiten.
+
+**Streamlit-Oberfläche:**
+- Neuer Flugbereich mit Flugnummer, Route, geplanter und aktueller Ankunft sowie Status.
+- Mock-Daten werden mit `Flugmonitoring simuliert` gekennzeichnet.
+- Im Bereich `Plan schnell bearbeiten` können Tag, Aktivität, Startzeit und Endzeit ausgewählt werden.
+- Die UI verwendet für Zeitänderungen dieselbe Konflikt-, Sortier- und Kalenderlogik wie der Chatbot.
+
+**Monitoring und Testbarkeit:**
+- Gestrichene und umgeleitete Flüge werden als relevante Monitoring-Ereignisse erkannt.
+- Neue Mock-Konfiguration `MOCK_FLIGHT_ARRIVAL_TIME` ergänzt.
+- `FLIGHT_NUMBER` kann als Standardwert aus der Environment-Konfiguration gelesen werden.
+
+### Betroffene Dateien
+- `reiseagent/agents/coordinator.py`
+- `reiseagent/agents/monitoring.py`
+- `reiseagent/main.py`
+- `reiseagent/providers/flights.py`
+- `reiseagent/streamlit_app.py`
+- `reiseagent/.env.example`
+
+### Tests
+- Flug BA 8493 mit geplanter Ankunft 16:05 und aktueller Ankunft 16:16 simuliert.
+- Tag 1 startete ab 16:16; Tag 2 blieb bei 09:00.
+- Mock-Verspätung erzeugte einen Replanning-Vorschlag.
+- Chat- und UI-Zeitänderung aktualisierten Plan und Kalenderpfad.
+- Python-Syntaxchecks erfolgreich.
+
+**Breaking Change:** Nein.
+
+---
+
+## [2026-06-21] Fix: Chat-Zeitparser und natürliche Neuplanungsbefehle
+
+**Status:** Merged
+**Datum & Uhrzeit:** 2026-06-21 15:46
+**Autor:** Ibrahim Danisman
+**Commit:** `475da25`
+
+### Zweck
+Zeitänderungen mit zwei Uhrzeiten wurden falsch interpretiert. Außerdem sollten natürlich formulierte Neuplanungswünsche zuverlässig von reinen Vorschlagsanfragen unterschieden werden.
+
+### Was wurde geändert
+- Bei `verschiebe die Aktivität um 14 Uhr auf 16 Uhr` ist 14:00 jetzt die alte und 16:00 die neue Uhrzeit.
+- Aktivitätsnamen mit einer einzelnen neuen Uhrzeit werden unterstützt.
+- Explizite Zeiträume wie `von 18 bis 20 Uhr` werden erkannt.
+- Die bisherige Aktivitätsdauer bleibt beim Verschieben erhalten; ohne gültige Dauer gelten 90 Minuten.
+- Zeitkonflikte werden erkannt und freundlich gemeldet.
+- Nach einer Änderung werden die Aktivitäten chronologisch sortiert.
+- Optional können nachfolgende Aktivitäten gemeinsam nach hinten verschoben werden.
+- Formulierungen wie `mach den Nachmittag später` werden unterstützt.
+- Deutsche Ordnungszahlen wie `zweiter Tag` werden erkannt.
+
+### Neuplanung und Vorschläge
+- Eindeutige Befehle wie `generiere Tag 2 erneut`, `plane Tag 2 nochmal` oder `mach den zweiten Tag neu` ändern den Plan und synchronisieren den Kalender.
+- Formulierungen wie `gib mir andere Vorschläge für Tag 2` oder `was kann ich an Tag 2 anders machen` zeigen nur Alternativen.
+- Der Plan bleibt bei Vorschlagsanfragen unverändert, bis beispielsweise `nimm Vorschlag 2` bestätigt wird.
+
+### Betroffene Dateien
+- `reiseagent/agents/coordinator.py`
+
+### Tests
+- Sechs Zeitformulierungen erfolgreich geprüft.
+- Konflikt, gleiche Uhrzeit, Bereichsverschiebung und Sortierung geprüft.
+- Sieben Neuplanungsformulierungen geprüft.
+- Sechs Vorschlagsformulierungen inklusive anschließender Übernahme geprüft.
+- Python-Syntaxcheck erfolgreich.
+
+**Breaking Change:** Nein.
+
+---
+
+## [2026-06-21] Fix: Telegram-Callbacks und Hintergrundthreads
+
+**Status:** Merged
+**Datum & Uhrzeit:** 2026-06-21 14:33
+**Autor:** Ibrahim Danisman
+**Commit:** `30bbacc`
+
+### Zweck
+Telegram-Callback-Daten mit zwei vollständigen UUIDs waren länger als das zulässige Limit. Navigation und Telegram-Polling konnten außerdem bei mehreren Startup-Aufrufen mehrfach gestartet werden.
+
+### Was wurde geändert
+- Telegram verwendet kurze Callback-Daten im Format `accept:<token>` beziehungsweise `reject:<token>`.
+- Token, Aktion, Trip-ID und Proposal-ID werden unter `trip["telegram_callbacks"]` gespeichert.
+- Verwendete oder ungültige Tokens werden freundlich behandelt und nach der Entscheidung entfernt.
+- Fehler beim Telegram-Versand und Callback-Polling werden ohne Secrets protokolliert.
+- Monitoring-, Navigation- und Telegram-Threads besitzen jeweils einen einfachen Einmal-Startschutz.
+- Der verbliebene Mojibake-Rest im Bulletpoint-Regex von `coordinator.py` wurde korrigiert.
+- `.env.example` wurde wiederhergestellt und um Telegram-/Flight-Konfiguration ergänzt.
+
+### Betroffene Dateien
+- `reiseagent/providers/telegram.py`
+- `reiseagent/main.py`
+- `reiseagent/store.py`
+- `reiseagent/agents/coordinator.py`
+- `reiseagent/.env.example`
+
+### Tests
+- Callback-Daten mit 18 Bytes erfolgreich geprüft.
+- Token-Speicherung und Entfernung geprüft.
+- Mehrfacher Startup-Aufruf erzeugte jeden Hintergrundthread nur einmal.
+- Bulletpoints `-`, `*` und `•` wurden erkannt.
+- `init_db()` und Python-Syntaxchecks erfolgreich.
+
+**Breaking Change:** Nein.
+
+---
+
 ## [2026-06-17] Fix: Zeichenkodierung in coordinator.py
 
 **Status:** Merged  
