@@ -106,22 +106,22 @@ def _try_apply_plan_change(trip: dict, message: str) -> dict | None:
         "empfehlung", "empfehlungen", "was ist", "was kann ich",
         "nehme", "nehmen", "nimm", "loesche", "losche", "entferne", "entfernen",
         "verschiebe", "uhrzeit", "shuffle", "mische", "neu", "mach", "aendere",
-        "andere",
+        "andere", "generiere", "plane", "erneut", "nochmal", "gefaellt", "spaeter",
     ]
     if not any(word in text for word in change_words):
         return None
 
-    if _is_suggestion_request(text) and not _is_clear_replace_request(text):
-        return _suggest_alternatives_from_chat(trip, message)
-
     if _is_clear_time_change_request(text):
         return _change_time_from_chat(trip, message)
 
+    if _is_clear_replan_request(text):
+        return _replan_day_or_section_from_chat(trip, message)
+
+    if _is_suggestion_request(text) and not _is_clear_replace_request(text):
+        return _suggest_alternatives_from_chat(trip, message)
+
     if any(word in text for word in ["loesche", "losche", "entferne", "entfernen"]):
         return _delete_activity_from_chat(trip, message)
-
-    if any(word in text for word in ["shuffle", "mische", "neu", "mach", "aendere", "andere"]):
-        return _replan_day_or_section_from_chat(trip, message)
 
     if any(word in text for word in ["fuelle", "fulle", "vervollstaendige", "vervollstandige", "plan auffuellen", "plan auffullen"]):
         return _fill_plan_from_chat(trip, message)
@@ -199,6 +199,9 @@ def _is_suggestion_request(text: str) -> bool:
         "alternative",
         "alternativen",
         "anders",
+        "andere",
+        "anderes",
+        "random",
         "woanders",
         "empfehlung",
         "empfehlungen",
@@ -231,7 +234,23 @@ def _is_clear_time_change_request(text: str) -> bool:
         return True
     if "plane" in text and re.search(r"von\s+\d{1,2}(?::\d{2})?\s*(?:uhr)?\s+bis\s+\d{1,2}", text):
         return True
+    if "mach" in text and _extract_requested_time(text):
+        return True
+    if "spaeter" in text and _section_from_text(text):
+        return True
     return False
+
+
+def _is_clear_replan_request(text: str) -> bool:
+    patterns = [
+        r"\bshuffle\b",
+        r"\bmische\b",
+        r"\bgeneriere(?:\s+mir)?\s+(?:tag\s*\d+|den\s+\w+\s+tag)\s+(?:neu|erneut)\b",
+        r"\bplane\s+(?:tag\s*\d+|den\s+\w+\s+tag)\s+(?:neu|nochmal|erneut)\b",
+        r"\bmach\s+(?:tag\s*\d+|den\s+\w+\s+tag)\s+(?:neu|anders)\b",
+        r"\btag\s*\d+\s+gefaellt\s+mir\s+nicht.*\b(?:neu|nochmal|erneut)\b",
+    ]
+    return any(re.search(pattern, text) for pattern in patterns)
 
 
 def _extract_requested_time(message: str) -> str | None:
@@ -244,18 +263,44 @@ def _extract_requested_time(message: str) -> str | None:
     return _format_time(match.group(1), match.group(2))
 
 
-def _get_day_number(message: str, fallback: int = 1) -> int:
-    match = re.search(r"tag\s*(\d+)", message.lower())
+def _day_number_from_text(message: str) -> int | None:
+    text = _plain_text(message)
+    match = re.search(r"tag\s*(\d+)", text)
     if match:
         return int(match.group(1))
-    return fallback
+
+    words = {
+        "ersten": 1,
+        "erster": 1,
+        "erste": 1,
+        "zweiten": 2,
+        "zweiter": 2,
+        "zweite": 2,
+        "dritten": 3,
+        "dritter": 3,
+        "dritte": 3,
+        "vierten": 4,
+        "vierter": 4,
+        "vierte": 4,
+        "fuenften": 5,
+        "sechsten": 6,
+        "siebten": 7,
+        "achten": 8,
+        "neunten": 9,
+        "zehnten": 10,
+    }
+    match = re.search(r"\b(" + "|".join(words) + r")\s+tag\b", text)
+    if match:
+        return words[match.group(1)]
+    return None
+
+
+def _get_day_number(message: str, fallback: int = 1) -> int:
+    return _day_number_from_text(message) or fallback
 
 
 def _extract_day_number(message: str) -> int | None:
-    match = re.search(r"tag\s*(\d+)", message.lower())
-    if match:
-        return int(match.group(1))
-    return None
+    return _day_number_from_text(message)
 
 
 def _find_day(active_plan: dict, day_number: int) -> dict | None:
@@ -880,6 +925,10 @@ def _delete_activity_from_chat(trip: dict, message: str) -> dict:
 
 def _change_time_from_chat(trip: dict, message: str) -> dict:
     active_plan = trip["active_plan"]
+
+    if _is_section_shift_request(message):
+        return _shift_section_later(trip, message)
+
     day, slot = _find_slot_for_change(active_plan, message)
     if not day or not slot:
         return _chat_change_reply("Ich konnte keine eindeutige Aktivitaet zum Verschieben finden.", False)
@@ -888,16 +937,43 @@ def _change_time_from_chat(trip: dict, message: str) -> dict:
     if not new_start:
         return _chat_change_reply("Ich konnte die neue Uhrzeit nicht erkennen.", False)
 
-    if _has_time_conflict(day, slot, new_start, new_end):
-        return _chat_change_reply("Die neue Uhrzeit ueberschneidet sich mit einer anderen Aktivitaet.", False)
-
     old_start = slot.get("start_time", "")
-    slot["start_time"] = new_start
-    slot["end_time"] = new_end
-    slot["notes"] = "Uhrzeit per Chat geaendert"
+    if new_start == old_start:
+        return _chat_change_reply(f"Die Aktivitaet liegt bereits um {old_start} Uhr.", False)
+
+    proposed_times = {id(slot): (new_start, new_end)}
+    if _should_shift_following_slots(message):
+        difference = _time_to_minutes(new_start) - _time_to_minutes(old_start)
+        old_start_minutes = _time_to_minutes(old_start)
+        for following_slot in day.get("time_slots", []):
+            following_start = _time_to_minutes(following_slot.get("start_time", "00:00"))
+            if following_slot is slot or following_start <= old_start_minutes:
+                continue
+            shifted_start = _minutes_to_time(following_start + difference)
+            shifted_end = _minutes_to_time(
+                _time_to_minutes(following_slot.get("end_time", following_slot["start_time"])) + difference
+            )
+            proposed_times[id(following_slot)] = (shifted_start, shifted_end)
+
+    conflict = _find_schedule_conflict(day, proposed_times)
+    if conflict:
+        conflict_name = conflict.get("activity", {}).get("name", "eine andere Aktivitaet")
+        return _chat_change_reply(f"Um {new_start} ist bereits {conflict_name} geplant.", False)
+
+    for changed_slot in day.get("time_slots", []):
+        times = proposed_times.get(id(changed_slot))
+        if not times:
+            continue
+        changed_slot["start_time"], changed_slot["end_time"] = times
+        changed_slot["notes"] = "Uhrzeit per Chat geaendert"
+
+    _sort_day_by_time(day)
     calendar_result = _refresh_plan_after_change(trip, [day])
+    extra_text = ""
+    if len(proposed_times) > 1:
+        extra_text = " Die nachfolgenden Aktivitaeten wurden ebenfalls nach hinten verschoben."
     return _chat_change_reply(
-        f"Erledigt: Ich habe '{slot['activity']['name']}' von {old_start} auf {new_start} verschoben.",
+        f"Ich habe '{slot['activity']['name']}' von {old_start} auf {new_start} verschoben.{extra_text}",
         True,
         calendar_result,
     )
@@ -1054,13 +1130,6 @@ def _find_slot_for_change(active_plan: dict, message: str):
     if day_number:
         days = [d for d in days if d.get("day_number") == day_number]
 
-    wanted_time = _extract_requested_time(message)
-    if wanted_time:
-        for day in days:
-            slot = _find_slot_near_time(day, wanted_time)
-            if slot:
-                return day, slot
-
     wanted = _extract_activity_name_from_message(message)
     if wanted:
         wanted_plain = _plain_text(wanted)
@@ -1070,6 +1139,13 @@ def _find_slot_for_change(active_plan: dict, message: str):
                 if wanted_plain in name or name in wanted_plain:
                     return day, slot
         return None, None
+
+    wanted_time = _extract_target_time_for_change(message)
+    if wanted_time:
+        for day in days:
+            for slot in day.get("time_slots", []):
+                if slot.get("start_time") == wanted_time:
+                    return day, slot
 
     for day in days:
         slots = day.get("time_slots", [])
@@ -1083,7 +1159,7 @@ def _extract_activity_name_from_message(message: str) -> str:
     text = message.strip()
     patterns = [
         r"(?:loesche|lösche|losche|entferne)\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
-        r"(?:verschiebe|setze)\s+(.+?)\s+(?:auf|von|um)\s+",
+        r"(?:verschiebe|setze|mach|plane)\s+(.+?)\s+(?:auf|von|um)\s+",
         r"aktivitaet\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
         r"aktivität\s+(.+?)(?:\s+an\s+tag\s+\d+|$)",
     ]
@@ -1091,9 +1167,31 @@ def _extract_activity_name_from_message(message: str) -> str:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             name = match.group(1).strip(" .,:;")
-            if name.lower() not in ["die", "das", "den", "abendessen", "mittagessen"]:
+            generic_names = [
+                "die", "das", "den", "abendessen", "mittagessen",
+                "die aktivitaet", "die aktivität", "aktivitaet", "aktivität",
+            ]
+            plain_name = _plain_text(name)
+            is_time = re.fullmatch(r"\d{1,2}(?::\d{2})?\s*(?:uhr)?", plain_name)
+            starts_with_time_word = plain_name.startswith(("um ", "auf ", "von "))
+            if (
+                plain_name not in [_plain_text(item) for item in generic_names]
+                and not is_time
+                and not starts_with_time_word
+            ):
                 return name
     return ""
+
+
+def _extract_target_time_for_change(message: str) -> str | None:
+    text = _plain_text(message)
+    old_and_new = re.search(
+        r"(?:um|von)\s+(\d{1,2})(?::(\d{2}))?\s*(?:uhr)?\s+auf\s+\d{1,2}",
+        text,
+    )
+    if old_and_new:
+        return _format_time(old_and_new.group(1), old_and_new.group(2))
+    return _extract_requested_time(message)
 
 
 def _extract_time_range(message: str, slot: dict) -> tuple[str | None, str | None]:
@@ -1104,20 +1202,33 @@ def _extract_time_range(message: str, slot: dict) -> tuple[str | None, str | Non
         end = _format_time(range_match.group(3), range_match.group(4))
         return start, end
 
-    time_match = re.search(r"(?:auf|um)\s+(\d{1,2})(?::(\d{2}))?\s*(?:uhr)?", text)
+    old_and_new = re.search(
+        r"(?:um|von)\s+\d{1,2}(?::\d{2})?\s*(?:uhr)?\s+auf\s+(\d{1,2})(?::(\d{2}))?",
+        text,
+    )
+    if old_and_new:
+        new_start = _format_time(old_and_new.group(1), old_and_new.group(2))
+        return new_start, _end_time_with_same_duration(slot, new_start)
+
+    time_match = re.search(r"auf\s+(\d{1,2})(?::(\d{2}))?\s*(?:uhr)?", text)
+    if not time_match:
+        time_match = re.search(r"um\s+(\d{1,2})(?::(\d{2}))?\s*(?:uhr)?", text)
     if not time_match:
         time_match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*uhr", text)
     if not time_match:
         return None, None
 
     new_start = _format_time(time_match.group(1), time_match.group(2))
+    return new_start, _end_time_with_same_duration(slot, new_start)
+
+
+def _end_time_with_same_duration(slot: dict, new_start: str) -> str:
     old_start = slot.get("start_time", "09:00")
     old_end = slot.get("end_time", "10:00")
     duration = _time_to_minutes(old_end) - _time_to_minutes(old_start)
     if duration <= 0:
         duration = 90
-    new_end = _minutes_to_time(_time_to_minutes(new_start) + duration)
-    return new_start, new_end
+    return _minutes_to_time(_time_to_minutes(new_start) + duration)
 
 
 def _format_time(hour: str, minute: str | None = None) -> str:
@@ -1135,27 +1246,94 @@ def _minutes_to_time(value: int) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
-def _has_time_conflict(day: dict, changed_slot: dict, new_start: str, new_end: str) -> bool:
-    start = _time_to_minutes(new_start)
-    end = _time_to_minutes(new_end)
+def _find_schedule_conflict(day: dict, proposed_times: dict) -> dict | None:
+    timeline = []
     for slot in day.get("time_slots", []):
-        if slot is changed_slot:
-            continue
-        other_start = _time_to_minutes(slot.get("start_time", "00:00"))
-        other_end = _time_to_minutes(slot.get("end_time", "00:00"))
-        if start < other_end and end > other_start:
-            return True
-    return False
+        start, end = proposed_times.get(
+            id(slot),
+            (slot.get("start_time", "00:00"), slot.get("end_time", "00:00")),
+        )
+        timeline.append((_time_to_minutes(start), _time_to_minutes(end), slot))
+
+    timeline.sort(key=lambda item: item[0])
+    for index in range(1, len(timeline)):
+        previous = timeline[index - 1]
+        current = timeline[index]
+        if current[0] < previous[1]:
+            if id(previous[2]) in proposed_times and id(current[2]) not in proposed_times:
+                return current[2]
+            if id(current[2]) in proposed_times and id(previous[2]) not in proposed_times:
+                return previous[2]
+            return current[2]
+    return None
+
+
+def _sort_day_by_time(day: dict):
+    day.get("time_slots", []).sort(
+        key=lambda slot: _time_to_minutes(slot.get("start_time", "00:00"))
+    )
+
+
+def _should_shift_following_slots(message: str) -> bool:
+    text = _plain_text(message)
+    phrases = [
+        "passe den rest an",
+        "pass den rest an",
+        "alles danach nach hinten",
+        "schiebe alles danach",
+    ]
+    return any(phrase in text for phrase in phrases)
+
+
+def _is_section_shift_request(message: str) -> bool:
+    text = _plain_text(message)
+    return "spaeter" in text and _section_from_text(message) is not None and not _extract_requested_time(message)
+
+
+def _shift_section_later(trip: dict, message: str) -> dict:
+    active_plan = trip["active_plan"]
+    day_number = _get_day_number(message)
+    day = _find_day(active_plan, day_number)
+    section = _section_from_text(message)
+    if not day or not section:
+        return _chat_change_reply("Ich konnte den Tagesabschnitt nicht erkennen.", False)
+
+    slots = [slot for slot in day.get("time_slots", []) if _slot_in_section(slot, section)]
+    if not slots:
+        return _chat_change_reply(f"Ich habe am {section} keine Aktivitaeten gefunden.", False)
+
+    proposed_times = {}
+    for slot in slots:
+        new_start = _minutes_to_time(_time_to_minutes(slot["start_time"]) + 60)
+        new_end = _minutes_to_time(_time_to_minutes(slot["end_time"]) + 60)
+        proposed_times[id(slot)] = (new_start, new_end)
+
+    conflict = _find_schedule_conflict(day, proposed_times)
+    if conflict:
+        conflict_name = conflict.get("activity", {}).get("name", "eine andere Aktivitaet")
+        return _chat_change_reply(f"Die Verschiebung wuerde sich mit {conflict_name} ueberschneiden.", False)
+
+    for slot in slots:
+        slot["start_time"], slot["end_time"] = proposed_times[id(slot)]
+        slot["notes"] = "Tagesabschnitt per Chat verschoben"
+
+    _sort_day_by_time(day)
+    calendar_result = _refresh_plan_after_change(trip, [day])
+    return _chat_change_reply(
+        f"Ich habe den {section} an Tag {day_number} um eine Stunde nach hinten verschoben.",
+        True,
+        calendar_result,
+    )
 
 
 def _section_from_text(message: str) -> str | None:
     text = _plain_text(message)
     if "vormittag" in text:
         return "Vormittag"
-    if "mittag" in text:
-        return "Mittag"
     if "nachmittag" in text:
         return "Nachmittag"
+    if "mittag" in text:
+        return "Mittag"
     if "abend" in text:
         return "Abend"
     return None
