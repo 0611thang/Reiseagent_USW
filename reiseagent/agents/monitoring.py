@@ -338,6 +338,43 @@ def monitor_trip(trip_id: str, use_mock_weather: bool = False) -> dict[str, Any]
     }
 
 
+def required_interval_seconds(trip: dict) -> int | None:
+    """
+    Gibt zurück, wie oft (in Sekunden) der Flug für diesen Trip geprüft werden soll.
+    Gibt None zurück wenn noch nicht geprüft werden muss (zu weit weg oder kein Flug).
+    """
+    request = trip.get("request", {})
+    if not request.get("flight_number"):
+        return None
+
+    flight_updates = trip.get("flight_updates") or {}
+    dep_str = flight_updates.get("scheduled_departure") or request.get("departure_date")
+
+    if not dep_str:
+        return None
+
+    try:
+        if "T" in dep_str:
+            dep_time = datetime.fromisoformat(dep_str)
+        else:
+            dep_time = datetime.fromisoformat(dep_str + "T00:00:00")
+    except ValueError:
+        return None
+
+    hours_until = (dep_time - datetime.now()).total_seconds() / 3600
+
+    if hours_until < -3:
+        return None       # Flug liegt klar in der Vergangenheit
+    if hours_until <= 2:
+        return 15 * 60    # alle 15 Minuten
+    if hours_until <= 6:
+        return 60 * 60    # jede Stunde
+    if hours_until <= 24:
+        return 6 * 3600   # alle 6 Stunden
+
+    return None           # mehr als 24h hin — noch nicht prüfen
+
+
 def monitor_all_active_trips(use_mock_weather: bool = False) -> dict[str, Any]:
     results = []
 

@@ -10,6 +10,18 @@ import providers.places as places_provider
 from providers.calendar import sync_changed_days_to_calendar, sync_full_plan_to_calendar
 from providers.telegram import send_plan_update
 from agents import planning, budget, checklist, recommendation, replanning
+import profile_store
+
+# Mapping von Profil-Kategorien (profile_learner) zu Formular-Labels (recommendation.py)
+PROFILE_TO_INTEREST = {
+    "kunst": "Museen",
+    "kultur": "Sehenswürdigkeiten",
+    "essen": "gutes Essen",
+    "natur": "Natur",
+    "sport": "Spaziergänge",
+    "reisen": "Sehenswürdigkeiten",
+    "musik": "Sehenswürdigkeiten",
+}
 
 
 def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
@@ -21,6 +33,22 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
         "status": "running",
         "summary": "Anfrage analysiert, Agenten werden koordiniert...",
     })
+
+    # Profil-Interessen laden und mit Formular-Interessen zusammenführen
+    request = dict(request)  # Kopie, damit Original nicht verändert wird
+    form_interests = list(request.get("interests", []))
+    profile_data = profile_store.get_top_interests(limit=5)
+    profile_labels = []
+    for item in profile_data:
+        label = PROFILE_TO_INTEREST.get(item["category"])
+        if label and label not in form_interests:
+            profile_labels.append(label)
+    merged_interests = form_interests + profile_labels
+    request["interests"] = merged_interests
+
+    profile_insight_text = ""
+    if profile_labels:
+        profile_insight_text = f" Profil ergänzt: {', '.join(profile_labels)}."
 
     weather = get_weather_for_trip(request, use_mock=use_mock_weather)
     insights.append({
@@ -91,7 +119,7 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
     insights.append(checklist.get_agent_insight())
 
     insights[0]["status"] = "completed"
-    insights[0]["summary"] = "Alle Agenten erfolgreich koordiniert."
+    insights[0]["summary"] = "Alle Agenten erfolgreich koordiniert." + profile_insight_text
 
     return {
         "active_plan": active_plan,

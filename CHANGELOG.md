@@ -5,6 +5,185 @@ Sortierung: **neueste Einträge oben**.
 
 ---
 
+## [2026-06-22] Refactor: Block E1 — Business-Logik aus streamlit_app.py ausgelagert
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-22  
+**Autor:** Valeriu  
+
+### Zweck
+`streamlit_app.py` (~1200 Zeilen) mischte UI-Rendering mit Business-Logik. Die Logik-Blöcke wurden in ein neues, Streamlit-freies Modul `ui_service.py` verschoben, damit `streamlit_app.py` nur noch UI und Session-Handling enthält.
+
+### Was wurde geändert
+
+**`ui_service.py` (neue Datei):**
+- `create_trip(req)` — erstellt einen Trip, ruft `coordinator.handle_plan_request` auf, speichert Ergebnis im Store. Gibt `(trip_id, active_plan)` zurück.
+- `create_demo_trip()` — dasselbe mit fest eingebautem Berlin-Demo-Request und `use_mock_weather=True`. Gibt `(trip_id, active_plan)` zurück.
+- `send_chat_command(trip, prompt, chat_messages)` — hängt User- und Assistenten-Nachricht an die übergebene `chat_messages`-Liste, ruft `coordinator.handle_chat_message` auf, speichert alles im Store. Gibt das Coordinator-Ergebnis zurück. Kein `st.*` — die Liste aus `st.session_state` wird direkt übergeben und durch Python list-by-reference mutiert.
+
+**`streamlit_app.py` — drei Stellen vereinfacht:**
+- `load_demo_trip`: von 13 auf 4 Zeilen — ruft jetzt `ui_service.create_demo_trip()`, setzt danach nur noch Session-State und `sync_plan_and_notify`.
+- `_send_chat_command_from_ui`: von 15 auf 7 Zeilen — ruft `ui_service.send_chat_command()`, kümmert sich danach nur noch um `add_status` und Session-State-Updates.
+- Form-Handler (Trip-Erstellung): von 12 auf 5 Zeilen — ruft `ui_service.create_trip()`, setzt danach nur noch Session-State.
+- `ui_service` importiert.
+
+**Bewusst nicht ausgelagert:**
+- `sync_plan_and_notify` — ruft `add_status` (Session-State) direkt, ist nur 4 Zeilen, kein Gewinn.
+- Datentransformationen — zu vage, zu geringes Risiko-Nutzen-Verhältnis (laut Plan-Entscheidung).
+
+### Betroffene Dateien
+- `reiseagent/ui_service.py` (neu)
+- `reiseagent/streamlit_app.py`
+
+### Tests
+- Syntax-Check erfolgreich: `python -c "import ui_service; import streamlit_app; print('OK')"` → `OK`.
+- Verhalten identisch zu vorher — reiner Verschiebe-Refactor, keine neue Funktionalität.
+
+**Breaking Change:** Nein — Verhalten unverändert, nur Struktur.
+
+---
+
+## [2026-06-22] Feature: Block B3 / D — IMAP Provider, Profil-Lerner, Interessen-basierte Reiseplanung
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-22  
+**Autor:** Valeriu  
+
+### Zweck
+Den Profil-Strang vollständig umsetzen: web.de-Postfach per IMAP auslesen (B3), Interessen daraus extrahieren und im Profil speichern (D1), und das gespeicherte Profil automatisch beim Erstellen neuer Reisen einbeziehen (D2).
+
+### Was wurde geändert
+
+**B3 — IMAP Provider (`providers/imap_mail.py`, neue Datei):**
+- Neuer Provider liest das web.de-Postfach (`usw_reiseplaner@web.de`) via `imaplib` (Python-Standardbibliothek, kein neues Dependency).
+- `_decode()` handhabt Umlaut-Encodings korrekt via `email.header.decode_header`.
+- `_extract_snippet()` zieht zuerst `text/plain`, Fallback `text/html` mit grobem Tag-Strip.
+- Nicht konfiguriert (`IMAP_USER`/`IMAP_PASSWORD` leer) → gibt `[]` zurück — fail-silent wie `gmail.py`.
+- Ausgabeformat `{subject, from, snippet}` ist identisch zu Gmail → `profile_learner.py` braucht keinen Umbau.
+- `.env.example` um IMAP-Variablen ergänzt (`IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASSWORD`) mit Hinweis auf App-Passwort (nicht das Login-Passwort).
+
+**D1 — Profil-Lerner erweitert (`agents/profile_learner.py`, `main.py`):**
+- Neue Funktion `learn_from_imap(emails)` in `profile_learner.py` — ruft intern `learn_from_gmail`-Logik wieder, nur mit `source="imap"`. Kein doppelter Code.
+- `run_profile_update()` hat neuen Parameter `imap_emails=None` — verarbeitet IMAP-Mails zusätzlich zu Telegram und Gmail.
+- `/api/profile/update`-Endpoint in `main.py` ruft jetzt `get_imap_emails(limit=20)` auf und übergibt sie an `run_profile_update`.
+
+**D2 — Interessen-basierte Reiseerstellung (`agents/coordinator.py`):**
+- `handle_plan_request` lädt vor dem Planen `profile_store.get_top_interests(limit=5)`.
+- Neue Mapping-Tabelle `PROFILE_TO_INTEREST` übersetzt Profil-Kategorien (z.B. `"kunst"`) in Formular-Labels (z.B. `"Museen"`), die `recommendation.py` versteht.
+- Profil-Labels werden ohne Duplikate zu den Formular-Interessen hinzugefügt.
+- Leeres Profil → Verhalten identisch zu vorher, kein Bruch.
+- Der Coordinator-Insight zeigt an, welche Profil-Interessen eingeflossen sind (z.B. „Profil ergänzt: Museen, Natur.").
+
+### Betroffene Dateien
+- `reiseagent/providers/imap_mail.py` (neu)
+- `reiseagent/agents/profile_learner.py`
+- `reiseagent/main.py`
+- `reiseagent/agents/coordinator.py`
+- `reiseagent/.env.example`
+
+### Tests
+- Syntax-Check aller geänderten Dateien erfolgreich (`python -c "from providers.imap_mail import get_recent_emails; from agents.profile_learner import learn_from_imap; from agents import coordinator; print('OK')"` → `OK`).
+- IMAP nicht konfiguriert → `get_recent_emails()` gibt `[]` zurück, kein Crash.
+- Leeres Profil → `handle_plan_request` läuft unverändert durch.
+
+**Breaking Change:** Nein — alle neuen Parameter sind optional, bestehende Aufrufe unverändert.
+
+---
+
+## [2026-06-22] Feature: Block C — Dynamischer Reiseplan, Flug-Monitoring-Zeitsteuerung, Aktivitätskarten
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-22  
+**Autor:** Valeriu  
+
+### Zweck
+Block C setzt die drei Kern-Features des Projekts um: intelligente Flug-Monitoring-Zeitsteuerung (C1), dynamisch getakteter Reiseplan mit echten Dauern und Fahrtzeiten statt fixer Zeitfenster (C2), sowie ein interaktives Aktivitätskarten-System mit 3-Button-Bearbeitung direkt im Plan (C3).
+
+### Was wurde geändert
+
+**C1 — Intelligente Flug-Monitoring-Zeitsteuerung:**
+- Neue Funktion `required_interval_seconds(trip)` in `monitoring.py`: berechnet das nötige Prüf-Intervall abhängig von der Zeit bis Abflug — alle 15 Min (≤2h), stündlich (≤6h), alle 6h (≤24h), oder `None` (noch nicht prüfen / kein Flug).
+- `_monitoring_loop` in `main.py` komplett umgebaut: schläft jetzt immer 60 Sekunden. Wetter läuft weiterhin auf dem alten `MONITORING_INTERVAL_SECONDS`-Intervall für alle aktiven Trips. Flüge werden pro Trip individuell geprüft — nur wenn `required_interval_seconds` einen Wert zurückgibt und genug Zeit seit `last_flight_update` vergangen ist.
+
+**C2 — Dynamischer Reiseplan (Variante A — deterministisch):**
+- `DAY_SLOTS` (4 fixe Zeitfenster) entfernt.
+- Neue Konstante `DURATION_BY_CATEGORY` gibt realistische Dauern pro Aktivitätskategorie (z.B. Museum 120 Min, Restaurant 75 Min, Park 60 Min).
+- Neue Funktion `_get_travel_minutes(from, to)`: fragt OpenRouteService für Fußweg zwischen zwei Aktivitäten ab. Fallback 20 Min wenn kein ORS-Key oder keine Koordinaten vorhanden.
+- `create_plan` taktet Aktivitäten jetzt dynamisch: `Start → +Dauer → +Fahrtzeit → nächste Aktivität`. Tagesstart kommt aus `request.day_start_time` (gesetzt durch A2-Picker), Fallback `09:00`.
+- Slot-Objekte erhalten neues Feld `travel_to_next_minutes` (für C3-Kaskade und UI-Anzeige).
+- Hilfsfunktionen `_time_to_minutes` und `_minutes_to_time` für die Zeitrechnung.
+- Ausgabeformat (`start_time`, `end_time`, `activity`, `notes`) ist identisch zum alten Format — kein Bruch für bestehende Konsumenten.
+
+**C3 — Aktivitätskarten mit 3-Button-System:**
+- `render_plan_actions` komplett neu geschrieben. Alter Expander mit Dropdown-Auswahl entfernt.
+- Pro Aktivität eine Zeile mit: editierbarem Zeitpicker + „✓ Zeit"-Button, Name + Fahrtzeit-Caption, Löschen-Button (🗑️), „Alt."-Button, „KI-Alt."-Button.
+- **Zeit ändern:** sendet Chat-Befehl an den Coordinator (`"plane {name} auf HH:MM Uhr an Tag X"`). Kaskade der Folge-Aktivitäten wird vom Coordinator intern gehandhabt.
+- **Löschen:** sendet `"lösche {name} an Tag X"` direkt an den Coordinator.
+- **Alternative:** klappt Alternativen gleicher Kategorie inline unter der Karte auf (nicht im Chat). Aktivitäten werden aus gecachtem `all_activities` gefiltert. „Wählen" ersetzt die Aktivität per Chat-Befehl.
+- **KI-Alternative:** liest `profile_store.get_top_interests()`. Kein Profil → Hinweis „verbinde deine E-Mails". Mit Profil → Aktivitäten nach Keyword-Treffern gerankt, Top 3 mit Begründung angezeigt.
+- Toggle-Logik: Alt. und KI-Alt. öffnen/schließen per `st.session_state`. Wenn einer aufklappt, schließt der andere automatisch.
+- `all_activities` wird einmal pro Trip in `st.session_state` gecacht — kein erneuter API-Aufruf bei jedem Render.
+- `profile_store` neu importiert in `streamlit_app.py`.
+
+### Betroffene Dateien
+- `reiseagent/agents/monitoring.py`
+- `reiseagent/main.py`
+- `reiseagent/agents/planning.py`
+- `reiseagent/streamlit_app.py`
+
+### Tests
+- Syntax-Checks für alle vier Dateien erfolgreich.
+- C1: Loop prüft Trips mit Flugnummer individuell; Trips ohne Flugnummer werden übersprungen.
+- C2: Plan trägt variable Startzeiten; ohne ORS-Key greift Fallback 20 Min, kein Crash.
+- C3: Alt.-Bereich klappt auf/zu; KI-Alt. zeigt Leerzustand wenn kein Profil vorhanden.
+
+**Breaking Change:** Nein — `time_slots`-Format identisch, `travel_to_next_minutes` ist additiv.
+
+---
+
+## [2026-06-22] Feature: Block A — Reiseübersicht, Datepicker, Tagesstart, Abflugzeit
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-22  
+**Autor:** Valeriu  
+
+### Zweck
+Vier UI-nahe Verbesserungen aus Block A des Implementierungsplans umsetzen: Abflugzeit im Flug-Panel anzeigen (A4), alle gespeicherten Reisen auf der Startseite listen (A1), Datepicker + Tagesstart-Picker statt Tage-Slider einführen (A2). A3 (Telegram-Bug) wurde bewusst nicht angefasst.
+
+### Was wurde geändert
+
+**A4 — Abflugzeit im Flug-Panel:**
+- `render_flight_panel` zeigt jetzt zusätzlich zur Ankunft auch die Abflugzeit an (geplant + aktuell/geschätzt).
+- Die Felder `scheduled_departure`, `estimated_departure`, `actual_departure` waren bereits in `flight_updates` vorhanden — es fehlte nur die Anzeige.
+- Reihenfolge im Panel: Route → Abflug → Ankunft → Status.
+
+**A1 — Reiseübersicht auf der Startseite:**
+- Neue Funktion `render_trip_overview()` listet alle gespeicherten Reisen aus SQLite (`store.list_trips()`).
+- Jede Reise zeigt: Ziel, Dauer, Startdatum, Status.
+- „Öffnen"-Button wechselt den aktiven Trip und lädt den zugehörigen Chat-Verlauf.
+- Wird an zwei Stellen aufgerufen: wenn kein Trip aktiv ist, und am Ende der Seite unter dem aktiven Trip.
+
+**A2 — Datepicker + Tagesstart statt Tage-Slider:**
+- Slider „Tage" entfernt. Stattdessen: Datepicker für Start- und Enddatum, `time_input` für Tagesstart.
+- `duration_days` wird automatisch aus der Datumsdifferenz berechnet.
+- Request enthält jetzt `start_date` (für Plan-Datumsangaben), `departure_date` (für Flight-API & C1), `day_start_time` (Standard-Startzeit für alle Tage, Basis für C2-Fallback-Kette).
+- `planning.create_plan` liest `start_date` aus dem Request statt `date.today()` zu verwenden — Plan-Tage tragen jetzt echte Reisedaten.
+- Validierung: Fehlermeldung wenn Enddatum vor Startdatum liegt.
+
+### Betroffene Dateien
+- `reiseagent/streamlit_app.py`
+- `reiseagent/agents/planning.py`
+
+### Tests
+- Syntax-Checks für beide Dateien erfolgreich (`python -c "import streamlit_app"`, `python -c "from agents import planning"`).
+- Flug-Panel: Mock-Reise → Abflug + Ankunft sichtbar.
+- Reiseübersicht: mehrere Trips → alle gelistet, „Öffnen" wechselt aktiven Trip.
+- Datepicker: Reise 15.–19. Juli → `duration_days=5`, Tag 1 trägt 15. Juli, Folgetage +1.
+
+**Breaking Change:** Nein — `duration_days` bleibt erhalten, bestehende Trips ohne `start_date` fallen auf `date.today()` zurück.
+
+---
+
 ## [2026-06-21] Feature: Flugankunft im Reiseplan und UI-Zeitbearbeitung
 
 **Status:** Merged

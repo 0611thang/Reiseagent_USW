@@ -59,12 +59,21 @@ def learn_from_gmail(emails):
         _extract_interests_from_text(full_text, source="gmail")
         _extract_event_from_text(full_text, source="gmail")
 
-def run_profile_update(telegram_messages=None, gmail_emails=None):
+def learn_from_imap(emails):
+    # Gleiches Format wie Gmail → Logik direkt wiederverwenden
+    for email in emails:
+        full_text = email.get("subject", "") + " " + email.get("snippet", "")
+        _extract_interests_from_text(full_text, source="imap")
+        _extract_event_from_text(full_text, source="imap")
+
+def run_profile_update(telegram_messages=None, gmail_emails=None, imap_emails=None):
     profile_store.init_db()
     if telegram_messages:
         learn_from_telegram(telegram_messages)
     if gmail_emails:
         learn_from_gmail(gmail_emails)
+    if imap_emails:
+        learn_from_imap(imap_emails)
     top_interests = profile_store.get_top_interests(limit=5)
     past_events = profile_store.get_past_events(limit=3)
     return {

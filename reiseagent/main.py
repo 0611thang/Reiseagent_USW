@@ -48,13 +48,43 @@ _telegram_thread_started = False
 
 
 def _monitoring_loop():
-    while True:
-        try:
-            monitoring.monitor_all_active_trips()
-        except Exception as exc:
-            print(f"[monitoring] Fehler im Hintergrundlauf: {exc}")
+    last_weather_check = 0.0
 
-        time.sleep(MONITORING_INTERVAL_SECONDS)
+    while True:
+        now = time.time()
+
+        # Wetter: weiterhin im alten festen Intervall für alle aktiven Trips
+        if now - last_weather_check >= MONITORING_INTERVAL_SECONDS:
+            try:
+                monitoring.monitor_all_active_trips()
+            except Exception as exc:
+                print(f"[monitoring] Wetter-Fehler: {exc}")
+            last_weather_check = now
+
+        # Flüge: pro Trip individuell, abhängig von Zeit bis Abflug
+        for trip in store.list_trips():
+            interval = monitoring.required_interval_seconds(trip)
+            if interval is None:
+                continue
+
+            last_update = trip.get("last_flight_update")
+            if last_update is None:
+                should_check = True
+            else:
+                try:
+                    elapsed = (datetime.now() - datetime.fromisoformat(last_update)).total_seconds()
+                    should_check = elapsed >= interval
+                except ValueError:
+                    should_check = True
+
+            if should_check:
+                try:
+                    monitoring.monitor_trip(trip["id"])
+                    print(f"[monitoring] Flug-Check für Trip {trip['id']} (Intervall {interval}s)")
+                except Exception as exc:
+                    print(f"[monitoring] Flug-Fehler für Trip {trip['id']}: {exc}")
+
+        time.sleep(60)
 
 
 @app.on_event("startup")
@@ -344,9 +374,15 @@ def get_daily_brief(trip_id: str, day_number: int):
 def update_profile():
     from providers.telegram import get_recent_messages
     from providers.gmail import get_recent_emails
+    from providers.imap_mail import get_recent_emails as get_imap_emails
     telegram_msgs = get_recent_messages(hours=72)
     gmail_emails = get_recent_emails(hours=72)
-    return run_profile_update(telegram_messages=telegram_msgs, gmail_emails=gmail_emails)
+    imap_emails = get_imap_emails(limit=20)
+    return run_profile_update(
+        telegram_messages=telegram_msgs,
+        gmail_emails=gmail_emails,
+        imap_emails=imap_emails,
+    )
 
 @app.post("/api/profile/detect-free-days")
 def detect_free_days():
