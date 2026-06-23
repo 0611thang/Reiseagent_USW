@@ -119,6 +119,16 @@ div[data-testid="stVerticalBlock"] { gap: 0; }
 .route-name { font-size: 13px; font-weight: 700; color: #111; }
 .route-sub  { font-size: 11px; color: #9ca3af; }
 .chat-msgs  { max-height: 320px; overflow-y: auto; margin-bottom: 10px; }
+.assistant-card {
+    background: #fff;
+    border: 1px solid #bfdbfe;
+    border-radius: 12px;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.10);
+    padding: 18px;
+    margin-bottom: 12px;
+}
+.assistant-title { font-size: 20px; font-weight: 750; color: #111827; margin-bottom: 4px; }
+.assistant-subtitle { font-size: 12px; color: #4b5563; margin-bottom: 12px; }
 .chat-user  {
     background: #2563eb; color: #fff;
     border-radius: 10px 10px 2px 10px;
@@ -238,6 +248,10 @@ def init_session():
         st.session_state.confirm_delete_trip_id = None
     if "plan_view_mode" not in st.session_state:
         st.session_state.plan_view_mode = "Detail"
+    if "trip_form_travel_type" not in st.session_state:
+        st.session_state.trip_form_travel_type = "solo"
+    if "trip_form_people" not in st.session_state:
+        st.session_state.trip_form_people = 1
 
 
 def add_status(message: str):
@@ -402,9 +416,10 @@ def render_left_col(trip: dict):
     hint = "" if msgs_html else '<div style="font-size:12px;color:#9ca3af;margin-bottom:8px;">Stell eine Frage zu deiner Reise, z.B. nach Budget, Wetter oder Aktivitäten.</div>'
 
     html = (
-        '<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);padding:16px;margin-bottom:12px;">'
-        '<div style="font-size:15px;font-weight:700;color:#111;margin-bottom:10px;">Chat</div>'
-        f'<div style="max-height:320px;overflow-y:auto;margin-bottom:10px;">{hint}{msgs_html}</div>'
+        '<div class="assistant-card">'
+        '<div class="assistant-title">Reiseassistent</div>'
+        '<div class="assistant-subtitle">Fragen stellen oder den aktuellen Reiseplan direkt anpassen.</div>'
+        f'<div style="min-height:180px;max-height:420px;overflow-y:auto;margin-bottom:10px;">{hint}{msgs_html}</div>'
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
@@ -1092,25 +1107,28 @@ def _pretrip_reply(message: str) -> str:
 
 
 def render_pretrip_chat():
-    st.markdown("### Chat")
-    messages = st.session_state.pretrip_chat_messages
-    if not messages:
-        st.caption("Erzähl mir, wohin du reisen möchtest. Ich helfe dir bei der Vorbereitung.")
-    for message in messages:
-        role = "Du" if message["role"] == "user" else "Reiseagent"
-        st.markdown(f"**{role}:** {message['content']}")
+    with st.container(border=True):
+        st.markdown("## Reiseassistent")
+        st.caption("Beschreibe dein Reiseziel oder stelle direkt eine Frage zur Planung.")
+        messages = st.session_state.pretrip_chat_messages
+        with st.container(height=240):
+            if not messages:
+                st.info("Ich helfe dir bei Ziel, Reisedauer, Budget und Interessen.")
+            for message in messages:
+                role = "Du" if message["role"] == "user" else "Reiseassistent"
+                st.markdown(f"**{role}:** {message['content']}")
 
-    with st.form("pretrip_chat_form", clear_on_submit=True):
-        prompt = st.text_input(
-            "Reisewunsch",
-            placeholder="z. B. Plane mir 3 Tage Köln mit gutem Essen",
-            label_visibility="collapsed",
-        )
-        submitted = st.form_submit_button("Senden", type="primary", use_container_width=True)
-        if submitted and prompt.strip():
-            st.session_state.pretrip_chat_messages.append({"role": "user", "content": prompt.strip()})
-            st.session_state.pretrip_chat_messages.append({"role": "assistant", "content": _pretrip_reply(prompt)})
-            st.rerun()
+        with st.form("pretrip_chat_form", clear_on_submit=True):
+            prompt = st.text_input(
+                "Nachricht an den Reiseassistenten",
+                placeholder="z. B. Plane mir 3 Tage Köln mit gutem Essen",
+                label_visibility="collapsed",
+            )
+            submitted = st.form_submit_button("Nachricht senden", type="primary", use_container_width=True)
+            if submitted and prompt.strip():
+                st.session_state.pretrip_chat_messages.append({"role": "user", "content": prompt.strip()})
+                st.session_state.pretrip_chat_messages.append({"role": "assistant", "content": _pretrip_reply(prompt)})
+                st.rerun()
 
 
 def render_right_col(plan: dict):
@@ -1453,6 +1471,22 @@ def main():
 
     # ── Eigene Reise planen ──────────────────────────────────────────────────
     with st.expander("Eigene Reise planen"):
+        travel_type_labels = {
+            "solo": "Solo",
+            "couple": "Paar",
+            "family": "Familie",
+            "group": "Freunde / Gruppe",
+        }
+        ttype = st.selectbox(
+            "Reiseart",
+            list(travel_type_labels.keys()),
+            format_func=lambda value: travel_type_labels[value],
+            key="trip_form_travel_type",
+        )
+        is_solo = ttype == "solo"
+        if is_solo:
+            st.session_state.trip_form_people = 1
+
         with st.form("plan_form"):
             fc1, fc2, fc3 = st.columns(3)
             with fc1:
@@ -1462,9 +1496,16 @@ def main():
                 day_start = st.time_input("Tagesstart (alle Tage)", value=time(9, 0))
             with fc2:
                 bud = st.number_input("Budget (EUR)", 100.0, 10000.0, 500.0, 50.0)
-                ppl = st.number_input("Personen", 1, 20, 2)
+                ppl = st.number_input(
+                    "Personen",
+                    min_value=1,
+                    max_value=20,
+                    step=1,
+                    key="trip_form_people",
+                    disabled=is_solo,
+                    help="Bei einer Solo-Reise ist die Personenanzahl fest auf 1 gesetzt.",
+                )
             with fc3:
-                ttype = st.selectbox("Reiseart", ["solo", "couple", "family", "group"])
                 ints = st.multiselect(
                     "Interessen",
                     ["Museen", "gutes Essen", "Sehenswürdigkeiten", "Spaziergänge", "Natur", "Shopping"],
@@ -1472,8 +1513,9 @@ def main():
                 )
                 flight_number = st.text_input(
                     "Flugnummer optional",
-                    value=os.getenv("FLIGHT_NUMBER", ""),
-                    placeholder="z. B. LH400"
+                    value="",
+                    placeholder="Optional, z. B. BA8493",
+                    help="Leer lassen, wenn keine Flugdaten berücksichtigt werden sollen.",
                 )
             if st.form_submit_button("Reise planen", type="primary"):
                 if end_date < start_date:
@@ -1488,7 +1530,7 @@ def main():
                     "day_start_time": day_start.strftime("%H:%M"),
                     "budget_total": bud,
                     "currency": "EUR",
-                    "number_of_people": ppl,
+                    "number_of_people": 1 if is_solo else int(ppl),
                     "travel_type": ttype,
                     "interests": ints or ["Sehenswürdigkeiten"],
                     "flight_number": flight_number.strip() or None,
