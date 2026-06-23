@@ -73,3 +73,15 @@ def list_trips() -> list:
     rows = conn.execute("SELECT data FROM trips").fetchall()
     conn.close()
     return [json.loads(row[0]) for row in rows]
+
+
+def delete_trip(trip_id: str) -> bool:
+    if not trip_id:
+        return False
+
+    conn = _get_conn()
+    cursor = conn.execute("DELETE FROM trips WHERE id=?", (trip_id,))
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return deleted

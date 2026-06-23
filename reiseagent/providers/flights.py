@@ -6,23 +6,24 @@ import httpx
 
 AVIATIONSTACK_DEFAULT_URL = "https://api.aviationstack.com/v1/flights"
 
-DESTINATION_AIRPORTS = {
-    "berlin": {"name": "Berlin Brandenburg", "iata": "BER"},
-    "münchen": {"name": "Flughafen München", "iata": "MUC"},
-    "muenchen": {"name": "Flughafen München", "iata": "MUC"},
-    "köln": {"name": "Köln/Bonn", "iata": "CGN"},
-    "koeln": {"name": "Köln/Bonn", "iata": "CGN"},
-    "paris": {"name": "Paris Charles de Gaulle", "iata": "CDG"},
-    "rom": {"name": "Rom Fiumicino", "iata": "FCO"},
-}
-
-
-def _mock_airport(value, fallback):
+def _mock_airport(value):
     if isinstance(value, dict):
         return value
     if value:
         return {"name": None, "iata": str(value).upper()}
-    return fallback
+    return None
+
+
+def _unavailable_flight(request: dict, reason: str, message: str) -> dict:
+    return {
+        "source": "api_unavailable",
+        "checked_at": _now_iso(),
+        "found": False,
+        "flight_number": request.get("flight_number"),
+        "status": "unknown",
+        "error_reason": reason,
+        "message": message,
+    }
 
 
 def _now_iso() -> str:
@@ -32,18 +33,8 @@ def _now_iso() -> str:
 def _mock_flight_updates(request: dict) -> dict:
     origin_airport = request.get("origin_airport") or request.get("from_airport")
     destination_airport = request.get("destination_airport") or request.get("to_airport")
-    destination_name = str(request.get("destination", "")).strip().lower()
-    origin_airport = _mock_airport(
-        origin_airport,
-        {"name": "London City Airport", "iata": "LCY"},
-    )
-    destination_airport = _mock_airport(
-        destination_airport,
-        DESTINATION_AIRPORTS.get(
-            destination_name,
-            {"name": request.get("destination") or "Reiseziel", "iata": None},
-        ),
-    )
+    origin_airport = _mock_airport(origin_airport)
+    destination_airport = _mock_airport(destination_airport)
     flight_number = request.get("flight_number") or "MOCK123"
 
     flight_date = request.get("departure_date") or (datetime.now() + timedelta(days=1)).date().isoformat()
@@ -228,9 +219,11 @@ def get_flight_status_for_trip(request: dict, use_mock: bool = False) -> dict:
     api_url = os.getenv("FLIGHT_API_URL", AVIATIONSTACK_DEFAULT_URL)
 
     if not api_key:
-        fallback = _mock_flight_updates(request)
-        fallback["message"] = "Kein FLIGHT_API_KEY gefunden. Mock-Flugdaten verwendet."
-        return fallback
+        return _unavailable_flight(
+            request,
+            "missing_api_key",
+            "Kein FLIGHT_API_KEY gefunden. Der Plan wurde ohne Flugdaten erstellt.",
+        )
 
     params = _build_aviationstack_params(request)
     params["access_key"] = api_key
@@ -247,11 +240,14 @@ def get_flight_status_for_trip(request: dict, use_mock: bool = False) -> dict:
         return _normalize_aviationstack_response(data, request)
 
     except Exception as exc:
-        fallback = _mock_flight_updates(request)
-        fallback["source"] = "mock_after_api_error"
-        fallback["api_error"] = str(exc)
-        fallback["message"] = "Aviationstack konnte nicht geladen werden. Mock-Daten wurden verwendet."
-        return fallback
+        reason = type(exc).__name__
+        if isinstance(exc, httpx.HTTPStatusError):
+            reason += f"_http_{exc.response.status_code}"
+        return _unavailable_flight(
+            request,
+            reason,
+            "Aviationstack konnte nicht geladen werden. Der Plan wurde ohne erfundene Flugdaten erstellt.",
+        )
 
 
 def get_flight_times_for_trip(request: dict) -> dict:

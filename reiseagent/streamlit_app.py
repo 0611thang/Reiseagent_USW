@@ -234,6 +234,10 @@ def init_session():
         st.session_state.pretrip_chat_messages = []
     if "background_refresh_at" not in st.session_state:
         st.session_state.background_refresh_at = None
+    if "confirm_delete_trip_id" not in st.session_state:
+        st.session_state.confirm_delete_trip_id = None
+    if "plan_view_mode" not in st.session_state:
+        st.session_state.plan_view_mode = "Detail"
 
 
 def add_status(message: str):
@@ -308,7 +312,41 @@ def refresh_profile_in_background():
 def get_current_trip() -> dict | None:
     if not st.session_state.trip_id:
         return None
-    return store.get_trip(st.session_state.trip_id)
+    trip = store.get_trip(st.session_state.trip_id)
+    if not trip:
+        return None
+
+    flight = trip.get("flight_updates") or {}
+    invalid_sources = ["mock_after_api_error", "api_unavailable", "api_error"]
+    if flight.get("source") in invalid_sources and not trip.get("invalid_flight_slots_removed"):
+        plan = trip.get("active_plan") or {}
+        removed = 0
+        for day in plan.get("days", []):
+            slots = day.get("time_slots", [])
+            valid_slots = [
+                slot for slot in slots
+                if slot.get("activity", {}).get("source") != "flight"
+            ]
+            removed += len(slots) - len(valid_slots)
+            day["time_slots"] = valid_slots
+            if day.get("day_number") == 1 and removed:
+                day["arrival_note"] = "Flugdaten konnten nicht bestätigt werden. Bitte Flugdatum prüfen und später neu laden."
+                day["title"] = "Ankunftstag – Flugdaten ausstehend"
+
+        insights = trip.get("agent_insights", [])
+        for insight in insights:
+            if insight.get("agent_name") == "flight_agent":
+                insight["status"] = "failed"
+                insight["summary"] = "Flugdaten konnten nicht bestätigt werden; simulierte Ankunftszeiten wurden entfernt."
+
+        trip["invalid_flight_slots_removed"] = True
+        if removed:
+            trip = store.update_trip(trip["id"], {
+                "active_plan": plan,
+                "agent_insights": insights,
+                "invalid_flight_slots_removed": True,
+            })
+    return trip
 
 
 def load_demo_trip():
@@ -381,7 +419,7 @@ def render_left_col(trip: dict):
             result = coordinator.handle_chat_message(trip, user_input.strip())
             assistant_message = {"role": "assistant", "content": result["message"]}
             st.session_state.chat_messages.append(assistant_message)
-            if "Kalender wurde" in result["message"]:
+            if "Kalender wurde" in result["message"] or "Kalender wurden" in result["message"]:
                 add_status("Kalender synchronisiert.")
             elif "Kalender konnte nicht aktualisiert werden" in result["message"]:
                 add_status("Kalender nicht eingerichtet oder nicht erreichbar.")
@@ -609,6 +647,78 @@ def _render_inline_activity_actions(trip: dict, day: dict, slot: dict, all_activ
                 st.rerun()
 
 
+def _render_plan_day_header(day: dict):
+    weather = day.get("weather") or {}
+    st.markdown(f"**{_format_day_label(day)} – {day.get('title', '')}**")
+    if weather.get("description"):
+        st.caption(f"{_weather_icon(weather.get('condition', ''))} {weather.get('description')}")
+    if day.get("arrival_note"):
+        st.info(day["arrival_note"])
+
+
+def _render_edit_expander(trip: dict, day: dict, slot: dict, all_activities: list, used_ids: set):
+    with st.expander("Bearbeiten"):
+        _render_inline_activity_actions(trip, day, slot, all_activities, used_ids)
+
+
+def _render_detail_plan(trip: dict, days: list, all_activities: list, used_ids: set):
+    for day in days:
+        _render_plan_day_header(day)
+        slots = day.get("time_slots", [])
+        if not slots:
+            st.info("Für diesen Tag ist noch kein Programmpunkt geplant.")
+
+        for slot in slots:
+            activity = slot.get("activity", {})
+            with st.container(border=True):
+                time_col, content_col = st.columns([1, 4])
+                with time_col:
+                    st.markdown(f"**{slot.get('start_time', '')}**")
+                    st.caption(slot.get("end_time", ""))
+                with content_col:
+                    st.markdown(f"**{activity.get('name', 'Aktivität')}**")
+                    st.caption(activity.get("description", ""))
+                    category = activity.get("category", "Aktivität")
+                    cost = float(activity.get("estimated_cost_total") or 0)
+                    travel = slot.get("travel_to_next_minutes")
+                    meta = [category, f"{cost:.0f} EUR" if cost else "kostenlos"]
+                    if travel:
+                        meta.append(f"{travel} Min. bis zum nächsten Ziel")
+                    st.caption(" · ".join(meta))
+                _render_edit_expander(trip, day, slot, all_activities, used_ids)
+
+
+def _render_compact_plan(trip: dict, days: list, all_activities: list, used_ids: set):
+    for day in days:
+        _render_plan_day_header(day)
+        for slot in day.get("time_slots", []):
+            activity = slot.get("activity", {})
+            with st.container(border=True):
+                time_col, name_col, category_col = st.columns([1.3, 3.5, 1.5])
+                time_col.markdown(f"**{slot.get('start_time')}–{slot.get('end_time')}**")
+                name_col.markdown(activity.get("name", "Aktivität"))
+                category_col.caption(activity.get("category", "Aktivität"))
+                _render_edit_expander(trip, day, slot, all_activities, used_ids)
+
+
+def _render_calendar_plan(trip: dict, days: list, all_activities: list, used_ids: set):
+    for day in days:
+        with st.expander(f"{_format_day_label(day)} – {day.get('title', '')}", expanded=True):
+            if day.get("arrival_note"):
+                st.info(day["arrival_note"])
+            for slot in day.get("time_slots", []):
+                activity = slot.get("activity", {})
+                time_col, block_col = st.columns([1, 5])
+                with time_col:
+                    st.markdown(f"**{slot.get('start_time')}**")
+                    st.caption(slot.get("end_time", ""))
+                with block_col:
+                    with st.container(border=True):
+                        st.markdown(f"**{activity.get('name', 'Aktivität')}**")
+                        st.caption(activity.get("category", "Aktivität"))
+                        _render_edit_expander(trip, day, slot, all_activities, used_ids)
+
+
 def render_interactive_plan(trip: dict):
     plan = trip.get("active_plan", {})
     days = plan.get("days", [])
@@ -620,34 +730,19 @@ def render_interactive_plan(trip: dict):
     title_col.markdown("### Tagesplan")
     status_col.caption("Aktiver Plan")
     st.caption(f"{len(days)} Tage für {destination}")
+    st.radio(
+        "Ansicht",
+        ["Detail", "Kompakt", "Kalender"],
+        horizontal=True,
+        key="plan_view_mode",
+    )
 
-    for day in days:
-        weather = day.get("weather") or {}
-        weather_text = weather.get("description", "")
-        st.markdown(f"**{_format_day_label(day)} – {day.get('title', '')}**")
-        if weather_text:
-            st.caption(f"{_weather_icon(weather.get('condition', ''))} {weather_text}")
-        if day.get("arrival_note"):
-            st.info(day["arrival_note"])
-
-        slots = day.get("time_slots", [])
-        if not slots:
-            st.info("Für diesen Tag ist noch kein Programmpunkt geplant.")
-        for slot in slots:
-            activity = slot.get("activity", {})
-            with st.container(border=True):
-                time_col, content_col = st.columns([1, 4])
-                with time_col:
-                    st.markdown(f"**{slot.get('start_time', '')}**")
-                    st.caption(slot.get("end_time", ""))
-                with content_col:
-                    st.markdown(f"**{activity.get('name', 'Aktivität')}**")
-                    st.caption(activity.get("description", ""))
-                    travel = slot.get("travel_to_next_minutes")
-                    category = activity.get("category", "Aktivität")
-                    travel_text = f" · {travel} Min. bis zum nächsten Ziel" if travel else ""
-                    st.caption(f"{category}{travel_text}")
-                _render_inline_activity_actions(trip, day, slot, all_activities, used_ids)
+    if st.session_state.plan_view_mode == "Kompakt":
+        _render_compact_plan(trip, days, all_activities, used_ids)
+    elif st.session_state.plan_view_mode == "Kalender":
+        _render_calendar_plan(trip, days, all_activities, used_ids)
+    else:
+        _render_detail_plan(trip, days, all_activities, used_ids)
 
 
 def render_middle_col(plan: dict):
@@ -744,20 +839,6 @@ def _flight_time_label(value) -> str:
         return text
 
 
-def _mock_route_fallback(request: dict) -> tuple:
-    destinations = {
-        "berlin": "Berlin Brandenburg (BER)",
-        "münchen": "Flughafen München (MUC)",
-        "muenchen": "Flughafen München (MUC)",
-        "köln": "Köln/Bonn (CGN)",
-        "koeln": "Köln/Bonn (CGN)",
-        "paris": "Paris Charles de Gaulle (CDG)",
-        "rom": "Rom Fiumicino (FCO)",
-    }
-    destination = destinations.get(str(request.get("destination", "")).lower(), "")
-    return "London City Airport (LCY)", destination
-
-
 def render_flight_panel(trip: dict):
     request = trip.get("request", {})
     flight_number = request.get("flight_number")
@@ -766,6 +847,24 @@ def render_flight_panel(trip: dict):
 
     details = trip.get("flight_updates") or {}
     number = details.get("flight_number") or flight_number
+    source = str(details.get("source", ""))
+    api_unavailable = source in ["mock_after_api_error", "api_unavailable", "api_error"]
+
+    if api_unavailable:
+        st.markdown(
+            f"""
+            <div class="card">
+                <div class="card-title">Flug {_esc(number)}</div>
+                <div style="font-size:13px;color:#374151;line-height:1.7;">
+                    Echte Flugroute und Uhrzeiten konnten nicht geladen werden.<br>
+                    Der Reiseplan verwendet deshalb keine simulierten Flugzeiten.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
     origin = _flight_airport_label(details.get("origin_airport"))
     destination = _flight_airport_label(details.get("destination_airport"))
     dep_scheduled = _flight_time_label(details.get("scheduled_departure"))
@@ -791,12 +890,8 @@ def render_flight_panel(trip: dict):
     if delay > 0 and raw_status in ["scheduled", "delayed"]:
         status = f"Verspätet ({delay} Min.)"
 
-    source = str(details.get("source", ""))
     simulation = ""
     if source.startswith("mock"):
-        fallback_origin, fallback_destination = _mock_route_fallback(request)
-        origin = origin or fallback_origin
-        destination = destination or fallback_destination
         simulation = '<div style="margin-top:8px;color:#92400e;font-size:12px;">Flugmonitoring simuliert</div>'
 
     if origin and destination:
@@ -961,7 +1056,7 @@ def render_plan_actions(trip: dict):
 
 def _send_chat_command_from_ui(trip: dict, prompt: str):
     result = ui_service.send_chat_command(trip, prompt, st.session_state.chat_messages)
-    if "Kalender wurde" in result["message"]:
+    if "Kalender wurde" in result["message"] or "Kalender wurden" in result["message"]:
         add_status("Kalender synchronisiert.")
     elif "Kalender konnte nicht aktualisiert werden" in result["message"]:
         add_status("Kalender nicht eingerichtet oder nicht erreichbar.")
@@ -1266,20 +1361,61 @@ def render_trip_overview(compact: bool = False):
         is_active = trip["id"] == st.session_state.trip_id
 
         with st.container(border=True):
-            st.markdown(f"**{destination}**")
+            marker = " · Aktive Reise" if is_active else ""
+            st.markdown(f"**{destination}**{marker}")
             date_label = start_date or "kein Datum"
-            active_label = " · aktuell geöffnet" if is_active else ""
-            st.caption(f"{date_label} · {duration} Tage · {status}{active_label}")
-            btn_label = "Aktiv" if is_active else "Öffnen"
-            if st.button(
-                btn_label,
-                key=f"open_trip_{trip['id']}_{'compact' if compact else 'full'}",
-                disabled=is_active,
-                use_container_width=True,
-            ):
-                st.session_state.trip_id = trip["id"]
-                st.session_state.chat_messages = trip.get("chat_messages", [])
-                st.rerun()
+            st.caption(f"{date_label} · {duration} Tage · {status}")
+
+            with st.expander("Aktionen"):
+                open_col, delete_col = st.columns(2)
+                if open_col.button(
+                    "Aktiv" if is_active else "Öffnen",
+                    key=f"open_trip_{trip['id']}_{'compact' if compact else 'full'}",
+                    disabled=is_active,
+                    use_container_width=True,
+                ):
+                    st.session_state.trip_id = trip["id"]
+                    st.session_state.chat_messages = trip.get("chat_messages", [])
+                    st.session_state.confirm_delete_trip_id = None
+                    st.rerun()
+
+                if delete_col.button(
+                    "Löschen",
+                    key=f"delete_trip_{trip['id']}_{'compact' if compact else 'full'}",
+                    use_container_width=True,
+                ):
+                    st.session_state.confirm_delete_trip_id = trip["id"]
+
+                if st.session_state.confirm_delete_trip_id == trip["id"]:
+                    st.warning(f"Reise nach {destination} wirklich löschen?")
+                    confirm_col, cancel_col = st.columns(2)
+                    if confirm_col.button(
+                        "Ja, löschen",
+                        key=f"confirm_delete_{trip['id']}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        deleted = store.delete_trip(trip["id"])
+                        if deleted:
+                            if is_active:
+                                st.session_state.trip_id = None
+                                st.session_state.chat_messages = []
+                                st.session_state.last_suggestions = []
+                                st.session_state.last_suggestion_context = {}
+                            st.session_state.pop(f"all_activities_{trip['id']}", None)
+                            st.session_state.confirm_delete_trip_id = None
+                            add_status("Reise gelöscht.")
+                        else:
+                            add_status("Reise konnte nicht gelöscht werden.")
+                        st.rerun()
+
+                    if cancel_col.button(
+                        "Abbrechen",
+                        key=f"cancel_delete_{trip['id']}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.confirm_delete_trip_id = None
+                        st.rerun()
 
 
 # ─────────────────────────── main ────────────────────────────────────────────

@@ -5,6 +5,36 @@ Sortierung: **neueste Einträge oben**.
 
 ---
 
+## [Unreleased] – UI-Polish und Reiseverwaltung
+
+### Hinzugefügt
+- Gespeicherte Reisen können jetzt mit einer Sicherheitsabfrage gelöscht werden. Beim Löschen der aktiven Reise wird auch der zugehörige Sitzungszustand zurückgesetzt.
+- Der Tagesplan bietet drei umschaltbare Ansichten: Detail, Kompakt und Kalender/Timeline. Die gewählte Ansicht bleibt bei Aktualisierungen der Seite erhalten.
+- Der Chat ist bereits vor der ersten Reiseplanung verfügbar und unterstützt bei der Erfassung grundlegender Reisewünsche.
+- Profilinformationen und freie Tage können im Hintergrund aktualisiert werden, ohne einen zusätzlichen Bedienblock in der Oberfläche anzuzeigen.
+
+### Geändert
+- „Deine Reisen“ wird als kompakte Kartenliste dargestellt. Öffnen und Löschen befinden sich in einem zurückhaltenden Aktionsbereich.
+- Bearbeitungsfelder für Aktivitäten sind standardmäßig eingeklappt und erscheinen erst über „Bearbeiten“.
+- Aktivitäten können weiterhin direkt zeitlich verschoben, gelöscht oder durch normale beziehungsweise profilbasierte Alternativen ersetzt werden.
+- Zeitänderungen berücksichtigen Dauer, Fahrtzeit und nachfolgende Aktivitäten. Überschneidungen und ein Tagesende nach Mitternacht werden verhindert.
+- Oben wird nur die neueste Statusmeldung hervorgehoben; ältere Meldungen bleiben in einem aufklappbaren Verlauf verfügbar.
+- Planänderungen aus der Oberfläche aktualisieren weiterhin den SQLite-Speicher und lösen die vorhandene Kalender- sowie optionale Telegram-Synchronisation aus.
+- Doppelte sichtbare Vorschlags- und Profilbereiche wurden entfernt, da diese Funktionen bereits über Chat und Aktivitätskarten erreichbar sind.
+
+### Behoben
+- Bei Ausfall oder fehlender Konfiguration der Flug-API werden keine erfundenen Flugrouten und Uhrzeiten mehr als reale Daten angezeigt.
+- Bereits gespeicherte, nicht bestätigte Mock-Flugzeiten werden aus betroffenen Reiseplänen entfernt und durch einen verständlichen Hinweis ersetzt.
+- Erfolgreiche Kalender-Statusmeldungen werden sowohl bei „Kalender wurde“ als auch bei „Kalender wurden aktualisiert“ erkannt.
+
+### Tests
+- Python-Syntax und Git-Diff wurden ohne Fehler geprüft.
+- Das Erstellen und Löschen eines temporären SQLite-Trips wurde erfolgreich getestet.
+- Detail-, Kompakt- und Kalenderansicht, Löschabfrage, Abbrechen und mobile Darstellung wurden im Browser geprüft.
+- Löschen, Zeitänderung und Alternativauswahl wurden mit lokalen Mocks getestet; Store, Kalender und Telegram wurden dabei wie erwartet angesteuert.
+
+---
+
 ## [2026-06-22] Refactor: Block E1 — Business-Logik aus streamlit_app.py ausgelagert
 
 **Status:** Merged  
