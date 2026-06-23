@@ -8,7 +8,7 @@ Sortierung: **neueste Einträge oben**.
 ## [2026-06-21] Feature: UI-Polish, Reiseverwaltung und Kalender-Bereinigung
 
 **Status:** Merged  
-**Datum & Uhrzeit:** 2026-06-21 11:X58  
+**Datum & Uhrzeit:** 2026-06-21 11:58  
 **Autor:** Ibrahim Danisman  
 **Commit:** `5d34658`
 
