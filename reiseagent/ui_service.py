@@ -5,6 +5,7 @@ Kein st.* hier. Nimmt Inputs, ruft Coordinator/Store/Provider, gibt Ergebnisse z
 
 import store
 from agents import coordinator
+from providers.calendar import delete_trip_from_calendar
 
 
 def create_trip(req: dict) -> tuple:
@@ -52,6 +53,16 @@ def create_demo_trip() -> tuple:
     })
 
     return trip_obj["id"], result["active_plan"]
+
+
+def delete_trip(trip: dict) -> dict:
+    """Löscht zuerst sichere Kalender-Einträge und danach den SQLite-Trip."""
+    calendar_result = delete_trip_from_calendar(trip)
+    trip_deleted = store.delete_trip(trip.get("id"))
+    return {
+        "trip_deleted": trip_deleted,
+        "calendar": calendar_result,
+    }
 
 
 def send_chat_command(trip: dict, prompt: str, chat_messages: list) -> dict:

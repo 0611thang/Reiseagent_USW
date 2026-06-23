@@ -7,6 +7,29 @@ SCOPES = [
 ]
 
 REISEAGENT_BLOCK_MARKER = "[REISEAGENT_USW_BLOCKED_DAY]"
+REISEAGENT_TRIP_MARKER_PREFIX = "[REISEAGENT_USW_TRIP_ID:"
+
+
+def _trip_marker(trip_id):
+    if not trip_id:
+        return ""
+    return f"{REISEAGENT_TRIP_MARKER_PREFIX}{trip_id}]"
+
+
+def _mark_description(description, trip_id=None, destination=None, date_str=None):
+    details = []
+    if destination:
+        details.append(f"Reiseziel: {destination}")
+    if date_str:
+        details.append(f"Reisedatum: {date_str}")
+
+    markers = [REISEAGENT_BLOCK_MARKER]
+    trip_marker = _trip_marker(trip_id)
+    if trip_marker:
+        markers.append(trip_marker)
+
+    additions = details + markers
+    return description + "\n\n" + "\n".join(additions)
 
 def _get_calendar_service():
     from google.oauth2.credentials import Credentials
@@ -72,7 +95,7 @@ def create_calendar_event(title, description, date_str):
         if not service:
             return {"created": False, "reason": "credentials_missing"}
 
-        marked_description = description + "\n\n" + REISEAGENT_BLOCK_MARKER
+        marked_description = _mark_description(description)
 
         event = {
             "summary": title,
@@ -91,7 +114,7 @@ def create_calendar_event(title, description, date_str):
         return {"created": False, "reason": type(error).__name__}
 
 
-def sync_plan_day_to_calendar(day):
+def sync_plan_day_to_calendar(day, trip_id=None, destination=None):
     try:
         service = _get_calendar_service()
         if not service:
@@ -101,11 +124,16 @@ def sync_plan_day_to_calendar(day):
         if not date_str:
             return {"updated": False, "reason": "date_missing"}
 
-        _delete_reiseagent_events_for_day(service, date_str)
+        _delete_reiseagent_events_for_day(service, date_str, trip_id, day)
 
         title = f"Reiseplan Tag {day.get('day_number')}"
         description = _build_day_description(day)
-        marked_description = description + "\n\n" + REISEAGENT_BLOCK_MARKER
+        marked_description = _mark_description(
+            description,
+            trip_id,
+            destination,
+            date_str,
+        )
 
         event = {
             "summary": title,
@@ -124,10 +152,10 @@ def sync_plan_day_to_calendar(day):
         return {"updated": False, "reason": type(error).__name__}
 
 
-def sync_changed_days_to_calendar(days):
+def sync_changed_days_to_calendar(days, trip_id=None, destination=None):
     results = []
     for day in days:
-        results.append(sync_plan_day_to_calendar(day))
+        results.append(sync_plan_day_to_calendar(day, trip_id, destination))
 
     if not results:
         return {"updated": False, "reason": "no_days"}
@@ -143,7 +171,7 @@ def sync_changed_days_to_calendar(days):
     }
 
 
-def sync_full_plan_to_calendar(plan):
+def sync_full_plan_to_calendar(plan, trip_id=None):
     try:
         service = _get_calendar_service()
         if not service:
@@ -153,11 +181,12 @@ def sync_full_plan_to_calendar(plan):
         if not days:
             return {"updated": False, "reason": "no_days"}
 
+        destination = (plan.get("request") or {}).get("destination")
         results = []
         for day in days:
             date_str = day.get("date")
             if date_str:
-                _delete_reiseagent_events_for_day(service, date_str)
+                _delete_reiseagent_events_for_day(service, date_str, trip_id, day)
 
         for day in days:
             date_str = day.get("date")
@@ -167,7 +196,12 @@ def sync_full_plan_to_calendar(plan):
 
             title = f"Reiseplan Tag {day.get('day_number')}"
             description = _build_day_description(day)
-            marked_description = description + "\n\n" + REISEAGENT_BLOCK_MARKER
+            marked_description = _mark_description(
+                description,
+                trip_id,
+                destination,
+                date_str,
+            )
 
             event = {
                 "summary": title,
@@ -195,7 +229,7 @@ def sync_full_plan_to_calendar(plan):
         return {"updated": False, "reason": type(error).__name__}
 
 
-def _delete_reiseagent_events_for_day(service, date_str):
+def _list_events_for_day(service, date_str):
     result = service.events().list(
         calendarId="primary",
         timeMin=f"{date_str}T00:00:00Z",
@@ -203,11 +237,74 @@ def _delete_reiseagent_events_for_day(service, date_str):
         singleEvents=True,
         maxResults=50,
     ).execute()
+    return result.get("items", [])
 
-    for item in result.get("items", []):
-        description = item.get("description", "")
-        if REISEAGENT_BLOCK_MARKER in description:
+
+def _event_matches_trip(item, trip_id=None, day=None):
+    description = item.get("description", "")
+    if REISEAGENT_BLOCK_MARKER not in description:
+        return False
+
+    trip_marker = _trip_marker(trip_id)
+    if REISEAGENT_TRIP_MARKER_PREFIX in description:
+        return bool(trip_marker and trip_marker in description)
+
+    # Alte Events haben noch keine trip_id. Sie werden nur bei exakt
+    # passender Tagesbeschreibung als Teil dieser Reise erkannt.
+    expected_description = _build_day_description(day) if day else ""
+    return bool(expected_description and expected_description in description)
+
+
+def _delete_reiseagent_events_for_day(service, date_str, trip_id=None, day=None):
+    deleted_count = 0
+    for item in _list_events_for_day(service, date_str):
+        if _event_matches_trip(item, trip_id, day):
             service.events().delete(calendarId="primary", eventId=item["id"]).execute()
+            deleted_count += 1
+    return deleted_count
+
+
+def delete_trip_from_calendar(trip):
+    try:
+        service = _get_calendar_service()
+        if not service:
+            return {
+                "success": False,
+                "deleted_count": 0,
+                "message": "Kalender nicht eingerichtet.",
+            }
+
+        active_plan = trip.get("active_plan") or {}
+        days = active_plan.get("days", [])
+        trip_id = trip.get("id")
+        deleted_count = 0
+
+        for day in days:
+            date_str = day.get("date")
+            if date_str:
+                deleted_count += _delete_reiseagent_events_for_day(
+                    service,
+                    date_str,
+                    trip_id,
+                    day,
+                )
+
+        if deleted_count:
+            message = f"{deleted_count} Kalendereinträge gelöscht."
+        else:
+            message = "Keine passenden Kalendereinträge gefunden."
+
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": message,
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "deleted_count": 0,
+            "message": f"Kalender konnte nicht aktualisiert werden: {type(error).__name__}",
+        }
 
 
 def _build_day_description(day):

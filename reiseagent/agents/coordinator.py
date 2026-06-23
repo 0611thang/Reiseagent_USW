@@ -338,7 +338,7 @@ def _try_sync_calendar_from_chat(trip: dict, message: str) -> dict | None:
     if not active_plan:
         return _chat_change_reply("Kein aktiver Plan gefunden.", False)
 
-    result = sync_full_plan_to_calendar(active_plan)
+    result = sync_full_plan_to_calendar(active_plan, trip.get("id"))
     if result.get("updated"):
         send_plan_update(active_plan, calendar_synced=True)
         return {
@@ -1061,7 +1061,7 @@ def _refresh_plan_after_change(trip: dict, changed_days: list | None = None) -> 
         "status": "completed",
         "summary": "Aktiver Plan wurde durch Chat-Befehl angepasst.",
     })
-    calendar_result = sync_full_plan_to_calendar(active_plan)
+    calendar_result = sync_full_plan_to_calendar(active_plan, trip.get("id"))
     send_plan_update(active_plan, calendar_synced=calendar_result.get("updated", False))
     return calendar_result
 

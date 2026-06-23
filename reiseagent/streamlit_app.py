@@ -283,8 +283,8 @@ def render_status_messages():
                 st.caption(message)
 
 
-def sync_plan_and_notify(plan: dict, reason: str = "Plan aktualisiert") -> dict:
-    calendar_result = sync_full_plan_to_calendar(plan)
+def sync_plan_and_notify(plan: dict, reason: str = "Plan aktualisiert", trip_id=None) -> dict:
+    calendar_result = sync_full_plan_to_calendar(plan, trip_id)
     calendar_ok = calendar_result.get("updated", False)
     telegram_ok = send_plan_update(plan, calendar_synced=calendar_ok)
 
@@ -367,7 +367,7 @@ def get_current_trip() -> dict | None:
 
 def load_demo_trip():
     trip_id, active_plan = ui_service.create_demo_trip()
-    sync_plan_and_notify(active_plan, "Demo-Reise erstellt")
+    sync_plan_and_notify(active_plan, "Demo-Reise erstellt", trip_id)
     st.session_state.trip_id = trip_id
     st.session_state.chat_messages = []
 
@@ -1259,7 +1259,7 @@ def render_proposal_banner(trip: dict):
             new_plan = proposal["proposed_plan"]
             new_plan["status"] = "active"
             store.update_trip(trip["id"], {"active_plan": new_plan, "proposals": trip["proposals"]})
-            sync_plan_and_notify(new_plan, "Neuplanung übernommen")
+            sync_plan_and_notify(new_plan, "Neuplanung übernommen", trip["id"])
             st.success("Neuplanung übernommen!")
             st.rerun()
     with cr:
@@ -1426,7 +1426,9 @@ def render_trip_overview(compact: bool = False):
                         type="primary",
                         use_container_width=True,
                     ):
-                        deleted = store.delete_trip(trip["id"])
+                        delete_result = ui_service.delete_trip(trip)
+                        calendar_result = delete_result["calendar"]
+                        deleted = delete_result["trip_deleted"]
                         if deleted:
                             if is_active:
                                 st.session_state.trip_id = None
@@ -1435,9 +1437,28 @@ def render_trip_overview(compact: bool = False):
                                 st.session_state.last_suggestion_context = {}
                             st.session_state.pop(f"all_activities_{trip['id']}", None)
                             st.session_state.confirm_delete_trip_id = None
-                            add_status("Reise gelöscht.")
+                            calendar_count = calendar_result.get("deleted_count", 0)
+                            if calendar_count:
+                                add_status(
+                                    f"Reise und {calendar_count} Kalendereinträge gelöscht."
+                                )
+                            elif calendar_result.get("success"):
+                                add_status(
+                                    "Reise gelöscht. Keine passenden Kalendereinträge gefunden."
+                                )
+                            else:
+                                add_status(
+                                    "Reise gelöscht. Kalender konnte nicht aktualisiert werden."
+                                )
                         else:
-                            add_status("Reise konnte nicht gelöscht werden.")
+                            calendar_count = calendar_result.get("deleted_count", 0)
+                            if calendar_count:
+                                add_status(
+                                    f"{calendar_count} Kalendereinträge gelöscht, "
+                                    "Reise konnte nicht gelöscht werden."
+                                )
+                            else:
+                                add_status("Reise konnte nicht gelöscht werden.")
                         st.rerun()
 
                     if cancel_col.button(
@@ -1569,7 +1590,7 @@ def main():
                 }
                 with st.spinner("Plane Reise..."):
                     trip_id, active_plan = ui_service.create_trip(req)
-                    sync_plan_and_notify(active_plan, "Plan erstellt")
+                    sync_plan_and_notify(active_plan, "Plan erstellt", trip_id)
                     st.session_state.trip_id = trip_id
                     st.session_state.chat_messages = []
                 st.rerun()

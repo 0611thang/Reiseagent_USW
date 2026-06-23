@@ -200,7 +200,7 @@ def _create_trip(request: dict, use_mock_weather: bool = False) -> dict:
         "flight_updates": result.get("flight_updates"),
     })
 
-    calendar_result = sync_full_plan_to_calendar(result["active_plan"])
+    calendar_result = sync_full_plan_to_calendar(result["active_plan"], trip["id"])
     send_plan_update(result["active_plan"], calendar_synced=calendar_result.get("updated", False))
 
     return _build_trip_response(store.get_trip(trip["id"]))
@@ -290,7 +290,7 @@ def accept_proposal(trip_id: str, proposal_id: str):
         "active_plan": new_plan,
         "proposals": trip["proposals"],
     })
-    calendar_result = sync_full_plan_to_calendar(new_plan)
+    calendar_result = sync_full_plan_to_calendar(new_plan, trip_id)
     send_plan_update(new_plan, calendar_synced=calendar_result.get("updated", False))
 
     return _build_trip_response(store.get_trip(trip_id))
@@ -493,7 +493,7 @@ def _handle_telegram_proposal_decision(action: str, trip_id: str, proposal_id: s
             "proposals": trip["proposals"],
         })
 
-        calendar_result = sync_full_plan_to_calendar(new_plan)
+        calendar_result = sync_full_plan_to_calendar(new_plan, trip_id)
         send_plan_update(new_plan, calendar_synced=calendar_result.get("updated", False))
 
         return "Neuer Reiseplan wurde angenommen."
