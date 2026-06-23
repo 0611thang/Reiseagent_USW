@@ -14,6 +14,10 @@ Sortierung: **neueste Einträge oben**.
 - Profilinformationen und freie Tage können im Hintergrund aktualisiert werden, ohne einen zusätzlichen Bedienblock in der Oberfläche anzuzeigen.
 
 ### Geändert
+- Der Reiseassistent wird vor und nach der Reiseplanung größer und deutlicher hervorgehoben.
+- Die Reisearten werden im Formular mit verständlichen Bezeichnungen wie „Solo“, „Paar“, „Familie“ und „Freunde / Gruppe“ angezeigt.
+- Die Flugnummer ist bei eigenen Reisen optional und wird nicht mehr automatisch mit einer Beispielnummer vorausgefüllt.
+- In „Deine Reisen“ wird eine vorhandene Flugnummer kompakt in der jeweiligen Reisekarte angezeigt.
 - „Deine Reisen“ wird als kompakte Kartenliste dargestellt. Öffnen und Löschen befinden sich in einem zurückhaltenden Aktionsbereich.
 - Bearbeitungsfelder für Aktivitäten sind standardmäßig eingeklappt und erscheinen erst über „Bearbeiten“.
 - Aktivitäten können weiterhin direkt zeitlich verschoben, gelöscht oder durch normale beziehungsweise profilbasierte Alternativen ersetzt werden.
@@ -23,6 +27,8 @@ Sortierung: **neueste Einträge oben**.
 - Doppelte sichtbare Vorschlags- und Profilbereiche wurden entfernt, da diese Funktionen bereits über Chat und Aktivitätskarten erreichbar sind.
 
 ### Behoben
+- Bei Solo-Reisen wird die Personenanzahl fest auf 1 gesetzt und entsprechend an die Reiseplanung übergeben.
+- Paar-, Familien- und Gruppenreisen starten mit mindestens 2 Personen; sinnvolle höhere Werte bleiben beim Wechsel der Reiseart erhalten.
 - Bei Ausfall oder fehlender Konfiguration der Flug-API werden keine erfundenen Flugrouten und Uhrzeiten mehr als reale Daten angezeigt.
 - Bereits gespeicherte, nicht bestätigte Mock-Flugzeiten werden aus betroffenen Reiseplänen entfernt und durch einen verständlichen Hinweis ersetzt.
 - Erfolgreiche Kalender-Statusmeldungen werden sowohl bei „Kalender wurde“ als auch bei „Kalender wurden aktualisiert“ erkannt.
