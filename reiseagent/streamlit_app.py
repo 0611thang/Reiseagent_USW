@@ -250,6 +250,8 @@ def init_session():
         st.session_state.plan_view_mode = "Detail"
     if "trip_form_travel_type" not in st.session_state:
         st.session_state.trip_form_travel_type = "solo"
+    if "trip_form_previous_travel_type" not in st.session_state:
+        st.session_state.trip_form_previous_travel_type = "solo"
     if "trip_form_people" not in st.session_state:
         st.session_state.trip_form_people = 1
 
@@ -1375,6 +1377,14 @@ def render_trip_overview(compact: bool = False):
         duration = req.get("duration_days", "?")
         start_date = req.get("start_date", "")
         status = plan.get("status", "kein Plan")
+        flight_updates = trip.get("flight_updates") or {}
+        flight_number = (
+            req.get("flight_number")
+            or trip.get("flight_number")
+            or flight_updates.get("flight_number")
+        )
+        if flight_number:
+            flight_number = str(flight_number).strip().upper()
 
         is_active = trip["id"] == st.session_state.trip_id
 
@@ -1382,7 +1392,10 @@ def render_trip_overview(compact: bool = False):
             marker = " · Aktive Reise" if is_active else ""
             st.markdown(f"**{destination}**{marker}")
             date_label = start_date or "kein Datum"
-            st.caption(f"{date_label} · {duration} Tage · {status}")
+            trip_details = f"{date_label} · {duration} Tage · {status}"
+            if flight_number:
+                trip_details += f" · Flug {flight_number}"
+            st.caption(trip_details)
 
             with st.expander("Aktionen"):
                 open_col, delete_col = st.columns(2)
@@ -1484,8 +1497,22 @@ def main():
             key="trip_form_travel_type",
         )
         is_solo = ttype == "solo"
-        if is_solo:
+
+        previous_travel_type = st.session_state.trip_form_previous_travel_type
+        if ttype != previous_travel_type:
+            if is_solo:
+                st.session_state.trip_form_people = 1
+            elif previous_travel_type == "solo":
+                st.session_state.trip_form_people = 2
+            elif st.session_state.trip_form_people < 2:
+                st.session_state.trip_form_people = 2
+            st.session_state.trip_form_previous_travel_type = ttype
+        elif is_solo:
             st.session_state.trip_form_people = 1
+        elif st.session_state.trip_form_people < 2:
+            st.session_state.trip_form_people = 2
+
+        minimum_people = 1 if is_solo else 2
 
         with st.form("plan_form"):
             fc1, fc2, fc3 = st.columns(3)
@@ -1498,12 +1525,16 @@ def main():
                 bud = st.number_input("Budget (EUR)", 100.0, 10000.0, 500.0, 50.0)
                 ppl = st.number_input(
                     "Personen",
-                    min_value=1,
+                    min_value=minimum_people,
                     max_value=20,
                     step=1,
                     key="trip_form_people",
                     disabled=is_solo,
-                    help="Bei einer Solo-Reise ist die Personenanzahl fest auf 1 gesetzt.",
+                    help=(
+                        "Bei einer Solo-Reise ist die Personenanzahl fest auf 1 gesetzt."
+                        if is_solo
+                        else "Für Paar-, Familien- und Gruppenreisen sind mindestens 2 Personen nötig."
+                    ),
                 )
             with fc3:
                 ints = st.multiselect(
@@ -1522,6 +1553,7 @@ def main():
                     st.error("Enddatum muss nach dem Startdatum liegen.")
                     st.stop()
                 dur = (end_date - start_date).days + 1
+                people_count = 1 if is_solo else max(2, int(ppl))
                 req = {
                     "destination": dest,
                     "duration_days": dur,
@@ -1530,7 +1562,7 @@ def main():
                     "day_start_time": day_start.strftime("%H:%M"),
                     "budget_total": bud,
                     "currency": "EUR",
-                    "number_of_people": 1 if is_solo else int(ppl),
+                    "number_of_people": people_count,
                     "travel_type": ttype,
                     "interests": ints or ["Sehenswürdigkeiten"],
                     "flight_number": flight_number.strip() or None,
