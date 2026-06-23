@@ -6,6 +6,24 @@ import httpx
 
 AVIATIONSTACK_DEFAULT_URL = "https://api.aviationstack.com/v1/flights"
 
+DESTINATION_AIRPORTS = {
+    "berlin": {"name": "Berlin Brandenburg", "iata": "BER"},
+    "münchen": {"name": "Flughafen München", "iata": "MUC"},
+    "muenchen": {"name": "Flughafen München", "iata": "MUC"},
+    "köln": {"name": "Köln/Bonn", "iata": "CGN"},
+    "koeln": {"name": "Köln/Bonn", "iata": "CGN"},
+    "paris": {"name": "Paris Charles de Gaulle", "iata": "CDG"},
+    "rom": {"name": "Rom Fiumicino", "iata": "FCO"},
+}
+
+
+def _mock_airport(value, fallback):
+    if isinstance(value, dict):
+        return value
+    if value:
+        return {"name": None, "iata": str(value).upper()}
+    return fallback
+
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -14,6 +32,18 @@ def _now_iso() -> str:
 def _mock_flight_updates(request: dict) -> dict:
     origin_airport = request.get("origin_airport") or request.get("from_airport")
     destination_airport = request.get("destination_airport") or request.get("to_airport")
+    destination_name = str(request.get("destination", "")).strip().lower()
+    origin_airport = _mock_airport(
+        origin_airport,
+        {"name": "London City Airport", "iata": "LCY"},
+    )
+    destination_airport = _mock_airport(
+        destination_airport,
+        DESTINATION_AIRPORTS.get(
+            destination_name,
+            {"name": request.get("destination") or "Reiseziel", "iata": None},
+        ),
+    )
     flight_number = request.get("flight_number") or "MOCK123"
 
     flight_date = request.get("departure_date") or (datetime.now() + timedelta(days=1)).date().isoformat()

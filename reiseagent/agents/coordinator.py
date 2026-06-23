@@ -75,7 +75,7 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
     if request.get("flight_number"):
         flight_updates = get_flight_status_for_trip(request)
         if flight_updates.get("found"):
-            adjusted = _adjust_first_day_for_flight(days, flight_updates)
+            adjusted = _adjust_first_day_for_flight(days, flight_updates, request)
             source = flight_updates.get("source", "unbekannt")
             summary = f"Flugdaten geladen ({source})."
             if adjusted:
@@ -172,7 +172,7 @@ def _flight_activity(name: str, description: str) -> dict:
     }
 
 
-def _adjust_first_day_for_flight(days: list, flight_updates: dict) -> bool:
+def _adjust_first_day_for_flight(days: list, flight_updates: dict, request: dict | None = None) -> bool:
     if not days:
         return False
 
@@ -193,6 +193,35 @@ def _adjust_first_day_for_flight(days: list, flight_updates: dict) -> bool:
         slot for slot in existing_slots
         if _time_to_minutes(slot.get("start_time", "00:00")) >= check_in_end
     ]
+
+    # Wenn der ursprüngliche Plan keine passende Abendaktivität mehr enthält,
+    # wird genau eine leichte Aktivität aus dem bereits ausgewählten Tagesplan verschoben.
+    if not later_slots and check_in_end <= 21 * 60:
+        interests = [str(item).lower() for item in (request or {}).get("interests", [])]
+        prefers_food = any("essen" in item or "food" in item for item in interests)
+
+        def arrival_rank(slot):
+            category = str(slot.get("activity", {}).get("category", "")).lower()
+            if prefers_food and category in ["restaurant", "food", "essen"]:
+                return 0
+            if category in ["walk", "nature", "park", "sightseeing", "restaurant", "food", "essen"]:
+                return 1
+            return 2
+
+        candidates = [
+            slot for slot in existing_slots
+            if slot.get("activity", {}).get("category") != "transport"
+        ]
+        if candidates:
+            chosen = dict(sorted(candidates, key=arrival_rank)[0])
+            activity = chosen.get("activity", {})
+            duration = min(int(activity.get("duration_minutes") or 90), 90)
+            evening_start = check_in_end + 30
+            chosen["start_time"] = _minutes_to_time(evening_start)
+            chosen["end_time"] = _minutes_to_time(evening_start + max(duration, 60))
+            chosen["travel_to_next_minutes"] = 0
+            chosen["notes"] = "Leichte Aktivität nach Ankunft und Hotel Check-in"
+            later_slots = [chosen]
 
     flight_number = flight_updates.get("flight_number", "Flug")
     arrival_end = min(arrival_minutes + 60, 23 * 60 + 59)
@@ -218,6 +247,11 @@ def _adjust_first_day_for_flight(days: list, flight_updates: dict) -> bool:
             ),
             "notes": "75 Minuten Puffer nach Flugankunft",
         })
+
+    if check_in_end > 21 * 60:
+        first_day["arrival_note"] = "Späte Ankunft – kein weiteres Programm empfohlen."
+    else:
+        first_day.pop("arrival_note", None)
 
     first_day["time_slots"] = new_slots + later_slots
     first_day["time_slots"].sort(key=lambda slot: _time_to_minutes(slot["start_time"]))
@@ -1105,6 +1139,13 @@ def _change_time_from_chat(trip: dict, message: str) -> dict:
             )
             proposed_times[id(following_slot)] = (shifted_start, shifted_end)
 
+    latest_end = max(_time_to_minutes(times[1]) for times in proposed_times.values())
+    if latest_end > 23 * 60 + 59:
+        return _chat_change_reply(
+            "Die Änderung würde den Tagesplan über Mitternacht hinaus verschieben. Bitte wähle eine frühere Uhrzeit.",
+            False,
+        )
+
     conflict = _find_schedule_conflict(day, proposed_times)
     if conflict:
         conflict_name = conflict.get("activity", {}).get("name", "eine andere Aktivitaet")
@@ -1409,7 +1450,8 @@ def _find_schedule_conflict(day: dict, proposed_times: dict) -> dict | None:
     for index in range(1, len(timeline)):
         previous = timeline[index - 1]
         current = timeline[index]
-        if current[0] < previous[1]:
+        travel_minutes = int(previous[2].get("travel_to_next_minutes") or 0)
+        if current[0] < previous[1] + travel_minutes:
             if id(previous[2]) in proposed_times and id(current[2]) not in proposed_times:
                 return current[2]
             if id(current[2]) in proposed_times and id(previous[2]) not in proposed_times:

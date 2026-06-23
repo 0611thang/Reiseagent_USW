@@ -230,11 +230,37 @@ def init_session():
         st.session_state.last_suggestions = []
     if "last_suggestion_context" not in st.session_state:
         st.session_state.last_suggestion_context = {}
+    if "pretrip_chat_messages" not in st.session_state:
+        st.session_state.pretrip_chat_messages = []
+    if "background_refresh_at" not in st.session_state:
+        st.session_state.background_refresh_at = None
 
 
 def add_status(message: str):
+    if not message:
+        return
+    if st.session_state.status_messages and st.session_state.status_messages[-1] == message:
+        return
     st.session_state.status_messages.append(message)
-    st.session_state.status_messages = st.session_state.status_messages[-5:]
+    st.session_state.status_messages = st.session_state.status_messages[-20:]
+
+
+def render_status_messages():
+    messages = []
+    for message in st.session_state.status_messages:
+        if not messages or messages[-1] != message:
+            messages.append(message)
+    st.session_state.status_messages = messages[-20:]
+    messages = st.session_state.status_messages
+    if not messages:
+        return
+
+    st.info(messages[-1])
+    older_messages = messages[:-1]
+    if older_messages:
+        with st.expander("Ältere Benachrichtigungen anzeigen"):
+            for message in reversed(older_messages):
+                st.caption(message)
 
 
 def sync_plan_and_notify(plan: dict, reason: str = "Plan aktualisiert") -> dict:
@@ -242,15 +268,41 @@ def sync_plan_and_notify(plan: dict, reason: str = "Plan aktualisiert") -> dict:
     calendar_ok = calendar_result.get("updated", False)
     telegram_ok = send_plan_update(plan, calendar_synced=calendar_ok)
 
+    parts = []
     if calendar_ok:
-        add_status(f"{reason}: Kalender synchronisiert.")
+        parts.append("Kalender synchronisiert.")
     else:
-        add_status(f"{reason}: Kalender nicht eingerichtet oder nicht erreichbar.")
-
+        parts.append("Kalender nicht eingerichtet oder nicht erreichbar.")
     if telegram_ok:
-        add_status("Telegram gesendet.")
+        parts.append("Telegram gesendet.")
+    add_status(f"{reason}: {' '.join(parts)}")
 
     return calendar_result
+
+
+def refresh_profile_in_background():
+    """Aktualisiert Profil und freie Tage höchstens alle 30 Minuten."""
+    last_refresh = st.session_state.background_refresh_at
+    if last_refresh and (datetime.now() - last_refresh).total_seconds() < 1800:
+        return
+
+    st.session_state.background_refresh_at = datetime.now()
+
+    if os.getenv("IMAP_USER") and os.getenv("IMAP_PASSWORD"):
+        try:
+            from providers.imap_mail import get_recent_emails
+            from agents.profile_learner import run_profile_update
+            run_profile_update(imap_emails=get_recent_emails(limit=20))
+        except Exception as exc:
+            print(f"[profile] Hintergrundaktualisierung übersprungen: {type(exc).__name__}")
+
+    token_path = os.path.join(os.path.dirname(__file__), "calendar_token.json")
+    if os.path.exists(token_path):
+        try:
+            from agents.free_time_detector import detect_and_save_free_days
+            detect_and_save_free_days(days_ahead=14)
+        except Exception as exc:
+            print(f"[calendar] Freie Tage konnten nicht aktualisiert werden: {type(exc).__name__}")
 
 
 def get_current_trip() -> dict | None:
@@ -345,7 +397,8 @@ def render_left_col(trip: dict):
             })
             st.rerun()
 
-    if active_plan:
+    # Vorschläge werden im Chat und direkt an den Aktivitätskarten angeboten.
+    if False and active_plan:
         days = active_plan.get("days", [])
         if days:
             st.caption("Neue Alternativen suchen, ohne den Plan direkt zu ändern.")
@@ -421,6 +474,8 @@ def render_left_col(trip: dict):
                             })
                             st.rerun()
 
+    render_trip_overview(compact=True)
+
     # Agent Insights
     insights = trip.get("agent_insights", [])
     if insights:
@@ -445,6 +500,154 @@ def render_left_col(trip: dict):
             '</div>'
         )
         st.markdown(html, unsafe_allow_html=True)
+
+
+def _activity_action_context(trip: dict):
+    plan = trip.get("active_plan", {})
+    cache_key = f"all_activities_{trip['id']}"
+    if cache_key not in st.session_state:
+        request = plan.get("request") or trip.get("request", {})
+        destination = request.get("destination", "")
+        st.session_state[cache_key] = get_places(destination, request) if destination else []
+
+    used_ids = set()
+    for day in plan.get("days", []):
+        for slot in day.get("time_slots", []):
+            used_ids.add(slot.get("activity", {}).get("id"))
+    return st.session_state[cache_key], used_ids
+
+
+def _render_inline_activity_actions(trip: dict, day: dict, slot: dict, all_activities: list, used_ids: set):
+    activity = slot.get("activity", {})
+    name = activity.get("name", "Aktivität")
+    category = activity.get("category", "activity")
+    slot_id = slot.get("id")
+    day_number = day.get("day_number")
+
+    time_col, save_col = st.columns([2, 1])
+    with time_col:
+        new_start = st.time_input(
+            "Startzeit",
+            value=_time_input_value(slot.get("start_time", "09:00")),
+            step=900,
+            key=f"inline_time_{slot_id}",
+        )
+    with save_col:
+        st.caption("Zeitplan")
+        if st.button("Zeit übernehmen", key=f"inline_save_{slot_id}", use_container_width=True):
+            old_start = slot.get("start_time", "09:00")
+            new_time = new_start.strftime("%H:%M")
+            prompt = (
+                f"verschiebe {name} von {old_start} Uhr auf {new_time} Uhr an Tag {day_number} "
+                "und schiebe alles danach nach hinten"
+            )
+            result = _send_chat_command_from_ui(trip, prompt)
+            add_status(result.get("message", "Zeitplan aktualisiert."))
+            st.rerun()
+
+    delete_col, alt_col, ai_col = st.columns(3)
+    with delete_col:
+        if st.button("Löschen", key=f"inline_delete_{slot_id}", use_container_width=True):
+            result = _send_chat_command_from_ui(trip, f"lösche {name} an Tag {day_number}")
+            add_status(result.get("message", "Aktivität gelöscht."))
+            st.rerun()
+    with alt_col:
+        if st.button("Alternative", key=f"inline_alt_{slot_id}", use_container_width=True):
+            st.session_state[f"show_alt_{slot_id}"] = not st.session_state.get(f"show_alt_{slot_id}", False)
+            st.session_state[f"show_ai_{slot_id}"] = False
+    with ai_col:
+        if st.button("KI-Alternative", key=f"inline_ai_{slot_id}", use_container_width=True):
+            st.session_state[f"show_ai_{slot_id}"] = not st.session_state.get(f"show_ai_{slot_id}", False)
+            st.session_state[f"show_alt_{slot_id}"] = False
+
+    if st.session_state.get(f"show_alt_{slot_id}", False):
+        candidates = [
+            item for item in all_activities
+            if item.get("category") == category and item.get("id") not in used_ids
+        ][:3]
+        if not candidates:
+            st.info("Keine weitere Alternative in dieser Kategorie gefunden.")
+        for candidate in candidates:
+            info_col, button_col = st.columns([3, 1])
+            info_col.caption(f"{candidate.get('name')} · {str(candidate.get('description', ''))[:80]}")
+            if button_col.button("Wählen", key=f"inline_pick_{slot_id}_{candidate.get('id')}"):
+                result = _send_chat_command_from_ui(
+                    trip,
+                    f"ersetze {name} durch {candidate.get('name')} an Tag {day_number}",
+                )
+                add_status(result.get("message", "Alternative übernommen."))
+                st.session_state[f"show_alt_{slot_id}"] = False
+                st.rerun()
+
+    if st.session_state.get(f"show_ai_{slot_id}", False):
+        interests = profile_store.get_top_interests(limit=5)
+        keywords = [item.get("keyword", "").lower() for item in interests]
+        ranked = []
+        for candidate in all_activities:
+            if candidate.get("id") in used_ids:
+                continue
+            searchable = " ".join(candidate.get("tags", []) + [candidate.get("category", "")]).lower()
+            hits = sum(1 for keyword in keywords if keyword and keyword in searchable)
+            if hits:
+                ranked.append((hits, candidate))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        candidates = [candidate for _, candidate in ranked[:3]]
+        if not interests:
+            st.info("Noch keine Profilinteressen bekannt. Nutze zunächst normale Alternativen.")
+        elif not candidates:
+            st.info("Für dein Profil wurde gerade keine weitere Alternative gefunden.")
+        for candidate in candidates:
+            info_col, button_col = st.columns([3, 1])
+            info_col.caption(f"{candidate.get('name')} · passend zu deinem Profil")
+            if button_col.button("Wählen", key=f"inline_ai_pick_{slot_id}_{candidate.get('id')}"):
+                result = _send_chat_command_from_ui(
+                    trip,
+                    f"ersetze {name} durch {candidate.get('name')} an Tag {day_number}",
+                )
+                add_status(result.get("message", "KI-Alternative übernommen."))
+                st.session_state[f"show_ai_{slot_id}"] = False
+                st.rerun()
+
+
+def render_interactive_plan(trip: dict):
+    plan = trip.get("active_plan", {})
+    days = plan.get("days", [])
+    request = plan.get("request") or trip.get("request", {})
+    destination = request.get("destination", "")
+    all_activities, used_ids = _activity_action_context(trip)
+
+    title_col, status_col = st.columns([4, 1])
+    title_col.markdown("### Tagesplan")
+    status_col.caption("Aktiver Plan")
+    st.caption(f"{len(days)} Tage für {destination}")
+
+    for day in days:
+        weather = day.get("weather") or {}
+        weather_text = weather.get("description", "")
+        st.markdown(f"**{_format_day_label(day)} – {day.get('title', '')}**")
+        if weather_text:
+            st.caption(f"{_weather_icon(weather.get('condition', ''))} {weather_text}")
+        if day.get("arrival_note"):
+            st.info(day["arrival_note"])
+
+        slots = day.get("time_slots", [])
+        if not slots:
+            st.info("Für diesen Tag ist noch kein Programmpunkt geplant.")
+        for slot in slots:
+            activity = slot.get("activity", {})
+            with st.container(border=True):
+                time_col, content_col = st.columns([1, 4])
+                with time_col:
+                    st.markdown(f"**{slot.get('start_time', '')}**")
+                    st.caption(slot.get("end_time", ""))
+                with content_col:
+                    st.markdown(f"**{activity.get('name', 'Aktivität')}**")
+                    st.caption(activity.get("description", ""))
+                    travel = slot.get("travel_to_next_minutes")
+                    category = activity.get("category", "Aktivität")
+                    travel_text = f" · {travel} Min. bis zum nächsten Ziel" if travel else ""
+                    st.caption(f"{category}{travel_text}")
+                _render_inline_activity_actions(trip, day, slot, all_activities, used_ids)
 
 
 def render_middle_col(plan: dict):
@@ -527,8 +730,8 @@ def _flight_airport_label(value) -> str:
         code = value.get("iata") or value.get("icao") or ""
         if name and code:
             return f"{name} ({code})"
-        return name or code or "Nicht verfügbar"
-    return str(value or "Nicht verfügbar")
+        return name or code or ""
+    return str(value or "")
 
 
 def _flight_time_label(value) -> str:
@@ -539,6 +742,20 @@ def _flight_time_label(value) -> str:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%H:%M")
     except ValueError:
         return text
+
+
+def _mock_route_fallback(request: dict) -> tuple:
+    destinations = {
+        "berlin": "Berlin Brandenburg (BER)",
+        "münchen": "Flughafen München (MUC)",
+        "muenchen": "Flughafen München (MUC)",
+        "köln": "Köln/Bonn (CGN)",
+        "koeln": "Köln/Bonn (CGN)",
+        "paris": "Paris Charles de Gaulle (CDG)",
+        "rom": "Rom Fiumicino (FCO)",
+    }
+    destination = destinations.get(str(request.get("destination", "")).lower(), "")
+    return "London City Airport (LCY)", destination
 
 
 def render_flight_panel(trip: dict):
@@ -577,14 +794,22 @@ def render_flight_panel(trip: dict):
     source = str(details.get("source", ""))
     simulation = ""
     if source.startswith("mock"):
+        fallback_origin, fallback_destination = _mock_route_fallback(request)
+        origin = origin or fallback_origin
+        destination = destination or fallback_destination
         simulation = '<div style="margin-top:8px;color:#92400e;font-size:12px;">Flugmonitoring simuliert</div>'
+
+    if origin and destination:
+        route_html = f"<strong>Route:</strong> {_esc(origin)} &rarr; {_esc(destination)}<br>"
+    else:
+        route_html = "<strong>Route:</strong> Noch nicht verfügbar<br>"
 
     st.markdown(
         f"""
         <div class="card">
             <div class="card-title">Flug { _esc(number) }</div>
             <div style="font-size:13px;color:#374151;line-height:1.7;">
-                <strong>Route:</strong> {_esc(origin)} &rarr; {_esc(destination)}<br>
+                {route_html}
                 <strong>Geplanter Abflug:</strong> {_esc(dep_scheduled)} &nbsp;|&nbsp;
                 <strong>Aktueller Abflug:</strong> {_esc(dep_current)}<br>
                 <strong>Geplante Ankunft:</strong> {_esc(scheduled)} &nbsp;|&nbsp;
@@ -743,6 +968,54 @@ def _send_chat_command_from_ui(trip: dict, prompt: str):
     st.session_state.last_suggestions = trip.get("last_suggestions", [])
     st.session_state.last_suggestion_context = trip.get("last_suggestion_context", {})
     return result
+
+
+def _pretrip_reply(message: str) -> str:
+    text = message.lower()
+    known_details = []
+    for city in ["Berlin", "Köln", "München", "Paris", "Rom", "Barcelona", "Istanbul"]:
+        if city.lower() in text:
+            known_details.append(f"Ziel {city}")
+            break
+
+    import re
+    days = re.search(r"(\d+)\s*(?:tage|tag)", text)
+    budget = re.search(r"(\d+)\s*(?:euro|eur|€)", text)
+    if days:
+        known_details.append(f"{days.group(1)} Tage")
+    if budget:
+        known_details.append(f"Budget {budget.group(1)} EUR")
+
+    prefix = ""
+    if known_details:
+        prefix = "Ich habe schon erkannt: " + ", ".join(known_details) + ". "
+    return (
+        prefix
+        + "Ich kann dir helfen, die Reise zu planen. "
+        "Nenne mir bitte Ziel, Datum, Dauer, Budget und Interessen oder trage die Angaben oben im Formular ein."
+    )
+
+
+def render_pretrip_chat():
+    st.markdown("### Chat")
+    messages = st.session_state.pretrip_chat_messages
+    if not messages:
+        st.caption("Erzähl mir, wohin du reisen möchtest. Ich helfe dir bei der Vorbereitung.")
+    for message in messages:
+        role = "Du" if message["role"] == "user" else "Reiseagent"
+        st.markdown(f"**{role}:** {message['content']}")
+
+    with st.form("pretrip_chat_form", clear_on_submit=True):
+        prompt = st.text_input(
+            "Reisewunsch",
+            placeholder="z. B. Plane mir 3 Tage Köln mit gutem Essen",
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button("Senden", type="primary", use_container_width=True)
+        if submitted and prompt.strip():
+            st.session_state.pretrip_chat_messages.append({"role": "user", "content": prompt.strip()})
+            st.session_state.pretrip_chat_messages.append({"role": "assistant", "content": _pretrip_reply(prompt)})
+            st.rerun()
 
 
 def render_right_col(plan: dict):
@@ -974,12 +1247,11 @@ def show_profile_and_suggestions():
 
 # ─────────────────────────── trip overview ───────────────────────────────────
 
-def render_trip_overview():
+def render_trip_overview(compact: bool = False):
     trips = store.list_trips()
     if not trips:
         return
 
-    st.markdown("---")
     st.markdown("### Deine Reisen")
 
     for trip in trips:
@@ -993,23 +1265,28 @@ def render_trip_overview():
 
         is_active = trip["id"] == st.session_state.trip_id
 
-        col_dest, col_dur, col_date, col_status, col_btn = st.columns([2, 1, 2, 1, 1])
-        col_dest.write(f"**{destination}**")
-        col_dur.caption(f"{duration} Tage")
-        col_date.caption(start_date or "kein Datum")
-        col_status.caption(status)
-
-        btn_label = "Aktiv" if is_active else "Öffnen"
-        if col_btn.button(btn_label, key=f"open_trip_{trip['id']}", disabled=is_active):
-            st.session_state.trip_id = trip["id"]
-            st.session_state.chat_messages = trip.get("chat_messages", [])
-            st.rerun()
+        with st.container(border=True):
+            st.markdown(f"**{destination}**")
+            date_label = start_date or "kein Datum"
+            active_label = " · aktuell geöffnet" if is_active else ""
+            st.caption(f"{date_label} · {duration} Tage · {status}{active_label}")
+            btn_label = "Aktiv" if is_active else "Öffnen"
+            if st.button(
+                btn_label,
+                key=f"open_trip_{trip['id']}_{'compact' if compact else 'full'}",
+                disabled=is_active,
+                use_container_width=True,
+            ):
+                st.session_state.trip_id = trip["id"]
+                st.session_state.chat_messages = trip.get("chat_messages", [])
+                st.rerun()
 
 
 # ─────────────────────────── main ────────────────────────────────────────────
 
 def main():
     init_session()
+    refresh_profile_in_background()
 
     # ── Header ───────────────────────────────────────────────────────────────
     h_left, h_right = st.columns([3, 2])
@@ -1036,8 +1313,7 @@ def main():
                 simulate_rain_day2()
                 st.rerun()
 
-    for msg in st.session_state.status_messages:
-        st.info(msg)
+    render_status_messages()
 
     # ── Eigene Reise planen ──────────────────────────────────────────────────
     with st.expander("Eigene Reise planen"):
@@ -1091,10 +1367,12 @@ def main():
     trip = get_current_trip()
 
     if not trip:
-        st.info("Lade eine Demo-Reise oder plane eine eigene Reise, um zu starten.")
-        render_trip_overview()
-        st.markdown("---")
-        show_profile_and_suggestions()
+        left, right = st.columns([1, 2.2])
+        with left:
+            render_pretrip_chat()
+            render_trip_overview(compact=True)
+        with right:
+            st.info("Plane über das Formular eine neue Reise oder öffne eine gespeicherte Reise.")
         return
 
     # ── Proposal Banner ──────────────────────────────────────────────────────
@@ -1114,8 +1392,7 @@ def main():
         render_left_col(trip)
 
     with col_plan:
-        render_middle_col(active_plan)
-        render_plan_actions(trip)
+        render_interactive_plan(trip)
 
     with col_budget:
         render_right_col(active_plan)
@@ -1165,12 +1442,6 @@ def main():
                             st.success("Gesendet!")
                         else:
                             st.error("Fehler beim Senden.")
-
-    # ── Trip Overview & Profile ──────────────────────────────────────────────
-    render_trip_overview()
-    st.markdown("---")
-    show_profile_and_suggestions()
-
 
 if __name__ == "__main__":
     main()
