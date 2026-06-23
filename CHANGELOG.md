@@ -5,40 +5,68 @@ Sortierung: **neueste Einträge oben**.
 
 ---
 
-## [Unreleased] – UI-Polish und Reiseverwaltung
+## [2026-06-21] Feature: UI-Polish, Reiseverwaltung und Kalender-Bereinigung
 
-### Hinzugefügt
-- Gespeicherte Reisen können jetzt mit einer Sicherheitsabfrage gelöscht werden. Beim Löschen der aktiven Reise wird auch der zugehörige Sitzungszustand zurückgesetzt.
-- Der Tagesplan bietet drei umschaltbare Ansichten: Detail, Kompakt und Kalender/Timeline. Die gewählte Ansicht bleibt bei Aktualisierungen der Seite erhalten.
-- Der Chat ist bereits vor der ersten Reiseplanung verfügbar und unterstützt bei der Erfassung grundlegender Reisewünsche.
-- Profilinformationen und freie Tage können im Hintergrund aktualisiert werden, ohne einen zusätzlichen Bedienblock in der Oberfläche anzuzeigen.
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-21 11:X58  
+**Autor:** Ibrahim Danisman  
+**Commit:** `5d34658`
 
-### Geändert
-- Der Reiseassistent wird vor und nach der Reiseplanung größer und deutlicher hervorgehoben.
-- Die Reisearten werden im Formular mit verständlichen Bezeichnungen wie „Solo“, „Paar“, „Familie“ und „Freunde / Gruppe“ angezeigt.
-- Die Flugnummer ist bei eigenen Reisen optional und wird nicht mehr automatisch mit einer Beispielnummer vorausgefüllt.
-- In „Deine Reisen“ wird eine vorhandene Flugnummer kompakt in der jeweiligen Reisekarte angezeigt.
-- „Deine Reisen“ wird als kompakte Kartenliste dargestellt. Öffnen und Löschen befinden sich in einem zurückhaltenden Aktionsbereich.
-- Bearbeitungsfelder für Aktivitäten sind standardmäßig eingeklappt und erscheinen erst über „Bearbeiten“.
-- Aktivitäten können weiterhin direkt zeitlich verschoben, gelöscht oder durch normale beziehungsweise profilbasierte Alternativen ersetzt werden.
-- Zeitänderungen berücksichtigen Dauer, Fahrtzeit und nachfolgende Aktivitäten. Überschneidungen und ein Tagesende nach Mitternacht werden verhindert.
-- Oben wird nur die neueste Statusmeldung hervorgehoben; ältere Meldungen bleiben in einem aufklappbaren Verlauf verfügbar.
-- Planänderungen aus der Oberfläche aktualisieren weiterhin den SQLite-Speicher und lösen die vorhandene Kalender- sowie optionale Telegram-Synchronisation aus.
-- Doppelte sichtbare Vorschlags- und Profilbereiche wurden entfernt, da diese Funktionen bereits über Chat und Aktivitätskarten erreichbar sind.
+### Zweck
+Die Streamlit-Oberfläche sollte übersichtlicher und präsentationstauglicher werden. Außerdem sollten gespeicherte Reisen besser verwaltet werden können und beim Löschen einer Reise auch die zugehörigen Reiseagent-Kalendereinträge entfernt werden.
 
-### Behoben
-- Bei Solo-Reisen wird die Personenanzahl fest auf 1 gesetzt und entsprechend an die Reiseplanung übergeben.
-- Paar-, Familien- und Gruppenreisen starten mit mindestens 2 Personen; sinnvolle höhere Werte bleiben beim Wechsel der Reiseart erhalten.
-- Bei Ausfall oder fehlender Konfiguration der Flug-API werden keine erfundenen Flugrouten und Uhrzeiten mehr als reale Daten angezeigt.
-- Bereits gespeicherte, nicht bestätigte Mock-Flugzeiten werden aus betroffenen Reiseplänen entfernt und durch einen verständlichen Hinweis ersetzt.
-- Erfolgreiche Kalender-Statusmeldungen werden sowohl bei „Kalender wurde“ als auch bei „Kalender wurden aktualisiert“ erkannt.
+### Was wurde geändert
+- Der Reiseassistent ist prominenter sichtbar und kann auch vor der Reiseplanung genutzt werden.
+- Die Reiseübersicht „Deine Reisen“ wurde kompakter gestaltet.
+- Gespeicherte Reisen können geöffnet und mit Sicherheitsabfrage gelöscht werden.
+- Beim Löschen einer Reise werden eindeutig zugehörige Reiseagent-Kalendereinträge entfernt.
+- Neue Kalender-Einträge enthalten einen eindeutigen Reiseagent-Marker mit `trip_id`, Reiseziel und Reisedatum.
+- In der Reiseübersicht wird eine vorhandene Flugnummer angezeigt.
+- Die Personenanzahl richtet sich nach der Reiseart: Solo = 1, Paar/Familie/Gruppe mindestens 2.
+- Flugnummern sind bei eigenen Reisen optional und nicht mehr automatisch vorausgefüllt.
+- Statusmeldungen zeigen nur noch die neueste Meldung prominent; ältere Meldungen bleiben ausklappbar.
+- Alte sichtbare Vorschlags- und Profil-Blöcke wurden aus der Oberfläche entfernt.
+
+### Planansichten und Aktivitätsbearbeitung
+- Der Tagesplan bietet drei Ansichten: Detail, Kompakt und Kalender/Timeline.
+- Aktivitäten können direkt im Reiseplan bearbeitet werden.
+- Bearbeitungsoptionen wie Zeit ändern, Löschen, Alternative und KI-Alternative sind nicht mehr dauerhaft sichtbar.
+- Zeitänderungen verschieben nachfolgende Aktivitäten dynamisch.
+- Bei unplausiblen Zeitänderungen oder Überschneidungen wird gewarnt.
+- Alternative und KI-Alternative bleiben an die bestehende Planlogik angebunden.
+
+### Flug- und Ankunftslogik
+- Fehlerhafte Flugrouten wie `Nicht verfügbar → Nicht verfügbar` werden vermieden.
+- Das Flugpanel zeigt verfügbare Flugdetails sauberer an.
+- Der Ankunftstag wird nach Flugankunft sinnvoller geplant.
+- Wenn nach Ankunft und Check-in genug Zeit bleibt, wird eine leichte Aktivität ergänzt.
+
+### Kalender-Verhalten
+- Beim Löschen einer Reise werden nur Kalendereinträge mit passender `trip_id` gelöscht.
+- Alte Kalendereinträge ohne `trip_id` werden nur gelöscht, wenn sie sicher als Reiseagent-Einträge erkannt werden.
+- Fremde Kalendertermine und Einträge anderer Reisen bleiben erhalten.
+- Wenn Google Calendar nicht eingerichtet ist, wird die Reise trotzdem aus SQLite gelöscht und eine verständliche Meldung angezeigt.
+
+### Betroffene Dateien
+- `reiseagent/streamlit_app.py`
+- `reiseagent/store.py`
+- `reiseagent/ui_service.py`
+- `reiseagent/providers/calendar.py`
+- `reiseagent/providers/flights.py`
+- `reiseagent/agents/coordinator.py`
+- `reiseagent/main.py`
 
 ### Tests
-- Python-Syntax und Git-Diff wurden ohne Fehler geprüft.
-- Das Erstellen und Löschen eines temporären SQLite-Trips wurde erfolgreich getestet.
-- Detail-, Kompakt- und Kalenderansicht, Löschabfrage, Abbrechen und mobile Darstellung wurden im Browser geprüft.
-- Löschen, Zeitänderung und Alternativauswahl wurden mit lokalen Mocks getestet; Store, Kalender und Telegram wurden dabei wie erwartet angesteuert.
+- Python-Syntaxcheck erfolgreich.
+- `git diff --check` erfolgreich.
+- Detail-, Kompakt- und Kalenderansicht geprüft.
+- Reise öffnen und Löschen mit Sicherheitsabfrage geprüft.
+- Session-Bereinigung nach Löschen der aktiven Reise geprüft.
+- Planaktionen wie Löschen, Zeitänderung und Alternative mit lokalen Mocks geprüft.
+- Sicherer Calendar-Mock bestätigt: Nur passende Reiseagent-Einträge werden gelöscht.
+- Fehlende Google-Calendar-Konfiguration blockiert das Löschen aus SQLite nicht.
 
+**Breaking Change:** Nein.
 ---
 
 ## [2026-06-22] Refactor: Block E1 — Business-Logik aus streamlit_app.py ausgelagert
