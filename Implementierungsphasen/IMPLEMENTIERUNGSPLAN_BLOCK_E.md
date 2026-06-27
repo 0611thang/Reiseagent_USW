@@ -1,7 +1,7 @@
 # Implementierungsplan — Block E (Technische Schulden)
 
 **Datum:** 21.06.2026
-**Grundlage:** [TODO_2026-06-21.md](TODO_2026-06-21.md)
+**Grundlage:** [TODO_2026-06-21.md](../Old%20Documentation%20-%20do%20not%20use/TODO_2026-06-21.md)
 **Umfang:** E1 (Business-Logik aus `streamlit_app.py` auslagern)
 **Zeitpunkt:** Ganz am Ende — erst nach C3, da dort ohnehin neue UI-Logik entsteht.
 

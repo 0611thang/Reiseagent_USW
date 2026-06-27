@@ -5,6 +5,48 @@ Sortierung: **neueste Einträge oben**.
 
 ---
 
+## [2026-06-23] Fix: Phase A — Kategorie-Vokabular und intelligente Tagesplanung
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-23  
+**Autor:** Valeriu  
+
+### Zweck
+Der Empfehlungs- und Planungsagent verhielt sich unintelligent: Restaurants tauchten nie im Plan auf, alle Aktivitäten dauerten 90 Minuten, und 4 Museen am Stück waren möglich. Root Cause war ein stiller Vokabular-Mismatch — `places.py` lieferte normalisierte Kategorienamen (`culture`, `food`, `nature`, `sightseeing`, `shopping`), aber `recommendation.py` und `planning.py` suchten nach den alten Namen (`museum`, `restaurant`, `walk`). Alle Lookups liefen ins Leere.
+
+### Was wurde geändert
+
+**`reiseagent/agents/recommendation.py`:**
+- Toten Code entfernt: `TIME_SLOTS_TEMPLATE`, `PREFERRED_MORNING`, `PREFERRED_LUNCH`, `PREFERRED_AFTERNOON`, `PREFERRED_EVENING` (wurden nie benutzt, Kategorienamen waren falsch).
+- Neue Konstante `MAX_PER_CATEGORY` — begrenzt wie oft eine Kategorie pro Tag vorkommt (z.B. `culture: 2`, `food: 2`, `sightseeing: 3`). Verhindert „4 Museen am Stück".
+- Neue Konstante `MIN_ACTIVITIES_PER_DAY = 4` — Mindest-Aktivitäten pro Tag.
+- `pick_activities_for_day()` komplett neu geschrieben mit explizitem Tagesrhythmus:
+  - Restaurants werden separat gehalten (`food`-Liste) und nur für Mittag und Abend eingesetzt.
+  - Fester Taktung: Vormittag → später Vormittag → **Mittagessen** → Nachmittag → **Abendessen**.
+  - Auffüllen mit weiteren Sehenswürdigkeiten wenn kein Restaurant verfügbar.
+- Alle Kategorienamen auf normalisiertes Vokabular umgestellt: `culture / food / nature / sightseeing / shopping`.
+
+**`reiseagent/agents/planning.py`:**
+- `DURATION_BY_CATEGORY` auf normalisierte Kategorienamen umgestellt:
+  - `"food": 75`, `"culture": 120`, `"sightseeing": 90`, `"nature": 60`, `"shopping": 90`
+  - Vorher waren alle alten Keys (`museum`, `restaurant`, `walk`) falsch — jede Aktivität fiel auf den Default 90 Min.
+- Neue Konstanten `LUNCH_TIME = "12:30"` und `DINNER_TIME = "19:00"`.
+- Mahlzeiten-Ankern in `create_plan()`: Wenn eine `food`-Aktivität an der Reihe ist, wird die aktuelle Zeit auf mindestens Mittag- bzw. Abendessenszeit vorgestellt. Das schafft vor dem Restaurant eine freie Pause und stellt sicher, dass Essen nie um 09:15 eingeplant wird.
+
+### Betroffene Dateien
+- `reiseagent/agents/recommendation.py`
+- `reiseagent/agents/planning.py`
+
+### Tests
+- München-Plan generiert: Restaurants erscheinen korrekt um ~12:40 (Mittag) und ~19:00 (Abend).
+- Dauern korrekt: Museum 120 Min, Restaurant 75 Min, Park 60 Min (statt immer 90 Min).
+- Keine 4 Museen in Folge mehr.
+- Syntax-Check erfolgreich.
+
+**Breaking Change:** Nein — Ausgabeformat `time_slots` identisch, keine neuen Abhängigkeiten.
+
+---
+
 ## [2026-06-21] Feature: UI-Polish, Reiseverwaltung und Kalender-Bereinigung
 
 **Status:** Merged  

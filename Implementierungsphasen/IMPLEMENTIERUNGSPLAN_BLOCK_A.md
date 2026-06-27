@@ -1,7 +1,7 @@
 # Implementierungsplan — Block A (Quick Wins)
 
 **Datum:** 21.06.2026
-**Grundlage:** [TODO_2026-06-21.md](TODO_2026-06-21.md)
+**Grundlage:** [TODO_2026-06-21.md](../Old%20Documentation%20-%20do%20not%20use/TODO_2026-06-21.md)
 **Umfang:** A1 (Reiseübersicht), A2 (Datepicker), A3 (Telegram-Bug), A4 (Abflugzeit-Panel)
 **Charakter:** UI-nah, geringes Risiko, keine LLM-/Provider-Änderungen. Idealer Einstieg.
 

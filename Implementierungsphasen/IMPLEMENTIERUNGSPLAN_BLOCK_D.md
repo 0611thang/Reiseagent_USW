@@ -1,7 +1,7 @@
 # Implementierungsplan — Block D (Profil & Interessen-Intelligenz)
 
 **Datum:** 21.06.2026
-**Grundlage:** [TODO_2026-06-21.md](TODO_2026-06-21.md)
+**Grundlage:** [TODO_2026-06-21.md](../Old%20Documentation%20-%20do%20not%20use/TODO_2026-06-21.md)
 **Umfang:** D1 (E-Mail-Monitoring-Agent), D2 (Interessen-basierte Reiseerstellung)
 **Abhängigkeit:** D1 braucht **B3** (IMAP-Provider). D2 braucht D1.
 

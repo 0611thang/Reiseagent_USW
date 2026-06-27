@@ -13,18 +13,17 @@ INTEREST_KEYWORDS = {
 def _normalize(s: str) -> str:
     return s.lower().replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
 
-TIME_SLOTS_TEMPLATE = [
-    {"start": "09:00", "end": "11:30"},
-    {"start": "12:00", "end": "13:30"},
-    {"start": "14:00", "end": "16:30"},
-    {"start": "17:00", "end": "19:00"},
-    {"start": "19:30", "end": "21:30"},
-]
+# Wie oft eine Kategorie pro Tag höchstens vorkommen darf (verhindert "4 Museen am Stück").
+# Kategorien kommen aus places.py normalisiert: culture, food, nature, sightseeing, shopping
+MAX_PER_CATEGORY = {
+    "culture": 2,
+    "food": 2,
+    "nature": 2,
+    "sightseeing": 3,
+    "shopping": 1,
+}
 
-PREFERRED_MORNING = ("sightseeing", "walk", "museum")
-PREFERRED_LUNCH = ("restaurant",)
-PREFERRED_AFTERNOON = ("museum", "activity", "sightseeing", "walk")
-PREFERRED_EVENING = ("restaurant", "activity")
+MIN_ACTIVITIES_PER_DAY = 4
 
 
 def score_activity(activity: dict, request: dict, weather: dict | None) -> dict:
@@ -131,25 +130,47 @@ def pick_activities_for_day(
         reverse=True,
     )
 
+    # Restaurants getrennt halten, damit sie gezielt für Mittag/Abend genutzt werden.
+    food = [a for a in scored if a["category"] == "food"]
+    sights = [a for a in scored if a["category"] != "food"]
+
     selected = []
-    used_categories: list[str] = []
+    selected_ids = set()
+    counts = {}
 
-    slots_needed = [PREFERRED_MORNING, PREFERRED_LUNCH, PREFERRED_AFTERNOON, PREFERRED_EVENING]
+    def add_sight():
+        """Nimmt die beste Sehenswürdigkeit, die das Vielfalt-Limit noch nicht sprengt."""
+        for a in sights:
+            if a["id"] in selected_ids:
+                continue
+            category = a["category"]
+            if counts.get(category, 0) >= MAX_PER_CATEGORY.get(category, 2):
+                continue
+            selected.append(a)
+            selected_ids.add(a["id"])
+            counts[category] = counts.get(category, 0) + 1
+            return True
+        return False
 
-    for preferred_cats in slots_needed:
-        candidates = [
-            a for a in scored
-            if a["id"] not in {s["id"] for s in selected}
-            and a["category"] in preferred_cats
-        ]
-        if candidates:
-            selected.append(candidates[0])
-        elif scored:
-            fallback = next(
-                (a for a in scored if a["id"] not in {s["id"] for s in selected}), None
-            )
-            if fallback:
-                selected.append(fallback)
+    def add_food():
+        """Nimmt das nächste Restaurant (für eine Mahlzeit, ohne Vielfalt-Limit)."""
+        for a in food:
+            if a["id"] in selected_ids:
+                continue
+            selected.append(a)
+            selected_ids.add(a["id"])
+            return True
+        return False
+
+    add_sight()           # Vormittag
+    add_sight()           # später Vormittag
+    add_food()            # Mittagessen
+    add_sight()           # Nachmittag
+    add_food()            # Abendessen
+
+    # Falls es keine Restaurants gab, mit weiteren Sehenswürdigkeiten auffüllen.
+    while len(selected) < MIN_ACTIVITIES_PER_DAY and add_sight():
+        pass
 
     return selected
 

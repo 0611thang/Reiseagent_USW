@@ -1,7 +1,7 @@
 # Implementierungsplan — Block B (Provider)
 
 **Datum:** 21.06.2026
-**Grundlage:** [TODO_2026-06-21.md](TODO_2026-06-21.md)
+**Grundlage:** [TODO_2026-06-21.md](../Old%20Documentation%20-%20do%20not%20use/TODO_2026-06-21.md)
 **Umfang:** B1 (✅ erledigt), B2 (✅ erledigt), B3 (web.de IMAP)
 
 ---

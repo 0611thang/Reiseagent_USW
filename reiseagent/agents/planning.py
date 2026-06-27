@@ -14,20 +14,21 @@ DAY_TITLES = [
     "Kulinarischer Genuss",
 ]
 
+# Kategorien kommen aus places.py bereits normalisiert an:
+# culture, food, nature, sightseeing, shopping
 DURATION_BY_CATEGORY = {
-    "restaurant": 75,
-    "essen": 75,
-    "museum": 120,
-    "sehenswuerdigkeit": 90,
-    "sehenswürdigkeiten": 90,
+    "food": 75,
+    "culture": 120,
     "sightseeing": 90,
-    "park": 60,
-    "walk": 60,
+    "nature": 60,
     "shopping": 90,
-    "activity": 90,
 }
 
 DEFAULT_TRAVEL_MINUTES = 20
+
+# Mahlzeiten auf realistische Uhrzeiten legen (erstes Restaurant = Mittag, zweites = Abend)
+LUNCH_TIME = "12:30"
+DINNER_TIME = "19:00"
 
 
 def _get_duration(activity):
@@ -92,8 +93,16 @@ def create_plan(request: dict, all_activities: list, weather: list) -> list:
         # Aktivitäten dynamisch takten: Start → +Dauer → +Fahrtzeit → nächste Aktivität
         time_slots = []
         current_minutes = _time_to_minutes(day_start_time)
+        meals_done = 0
 
         for i, activity in enumerate(activities_for_day):
+            # Restaurants auf Mittag/Abend ankern: wenn wir noch früher dran sind,
+            # entsteht davor freie Zeit. Sind wir schon spät dran, bleibt es wie es ist.
+            if activity.get("category") == "food":
+                meal_time = LUNCH_TIME if meals_done == 0 else DINNER_TIME
+                current_minutes = max(current_minutes, _time_to_minutes(meal_time))
+                meals_done += 1
+
             duration = _get_duration(activity)
             end_minutes = current_minutes + duration
 
