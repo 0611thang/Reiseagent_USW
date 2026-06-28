@@ -35,9 +35,10 @@ Der Umbau ist in Phasen gegliedert (Phase 0 bis Phase 4). Jede Phase baut auf de
 **Wie testen / merken.** Schickt im Chat verschiedene Formulierungen, z.B. „verschiebe das Abendessen auf 20 Uhr", „lösche an Tag 2 das Museum", „wie ist das Wetter?". Jede sollte beim richtigen Handler landen. Im Terminal seht ihr im Trace, welches Tool gewählt wurde, z.B. `[Orchestrator] → delete_activity`. Ohne API-Key muss der Chat trotzdem antworten (regelbasierter Fallback). Den kompletten Graphen könnt ihr euch übrigens als ASCII-Diagramm ausgeben lassen:
 
 ```bash
-cd reiseagent
-python -c "import sys; sys.path.insert(0,'.'); import graph; print(graph._compiled_graph.get_graph().draw_ascii())"
+python -c "import sys; sys.path.insert(0,'.'); import graph; print(graph._get_graph().get_graph().draw_mermaid())"
 ```
+**https://mermaid.live/** ist eine gute Website, um das Diagramm zu visualisieren.
+
 
 ---
 
