@@ -5,6 +5,406 @@ Sortierung: **neueste Einträge oben**.
 
 ---
 
+## [2026-06-28] Fix: Angenommene Telegram-Vorschläge in Google Calendar eintragen
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-28  
+**Autor:** Valeriu  
+
+### Zweck
+Wenn ein Freizeitvorschlag über den Telegram-Button „✅ Ja, planen!" angenommen wurde, entstand zwar ein Reiseplan (sichtbar in Streamlit), aber er wurde **nicht** in den Google-Kalender eingetragen. Der Vorschlags-Handler rief — anders als der Flug-Verspätungs-Handler — keine Kalender-Synchronisation auf.
+
+### Was wurde geändert
+
+**`reiseagent/main.py`** (`_handle_telegram_suggestion_decision`, accept-Zweig):
+- Nach dem Erstellen und Speichern des Plans wird jetzt `sync_full_plan_to_calendar(new_plan, trip["id"])` aufgerufen — analog zum Flug-Handler. Die Kalendereinträge werden mit der `trip_id` markiert, damit sie später sauber wieder gelöscht werden können.
+- `send_plan_update` bekommt jetzt den echten `calendar_synced`-Status statt implizit `False`.
+
+### Betroffene Dateien
+- `reiseagent/main.py`
+
+### Tests
+- Import-/Syntax-Check bestanden; `sync_full_plan_to_calendar` ist im Handler vorhanden.
+- Vorschlag über Telegram annehmen → Plan erscheint in Streamlit **und** als „Reiseplan Tag 1"-Eintrag im Google-Kalender am freien Tag.
+
+### Hinweis
+- Bereits zuvor angenommene Pläne werden nicht rückwirkend eingetragen — der Sync greift nur bei neuen Annahmen.
+- Voraussetzung: `credentials.json` / `calendar_token.json` liegen im Ordner `reiseagent/`.
+
+**Breaking Change:** Nein — additiver Aufruf im bestehenden accept-Zweig.
+
+---
+
+## [2026-06-28] Fix: Phase 4 Nachbesserungen — Kalender-Erkennung + Telegram-Vorschlags-Buttons
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-28  
+**Autor:** Valeriu  
+
+### Zweck
+Beim Testen von Phase 4 traten drei Fehler in der Kalender-Erkennung und ein fehlendes Feature im Telegram-Flow auf: (1) mehrtägige Kalender-Events (z.B. 3-Tage-Urlaub als Serie) wurden nur am Starttag erkannt, (2) Tage ohne Termin wurden dem LLM gar nicht gezeigt, sodass echte freie Tage unsichtbar blieben, (3) der Test lud die `.env` nicht, wodurch der LLM-Aufruf still auf den Fallback fiel und alle Tage als „frei" markierte, und (4) der „Ja, planen!"-Button in Telegram funktionierte nicht — die Empfangs-Seite für Vorschläge fehlte komplett.
+
+### Was wurde geändert
+
+**`reiseagent/providers/calendar.py`** (`get_calendar_events`):
+- Mehrtägige ganztägige Events werden jetzt in **einen Eintrag pro Tag** aufgespalten. Google liefert eine Serie (z.B. 3.–5. Juli) als ein einzelnes Event mit Start- und Enddatum (Ende exklusiv); bisher wurde nur der Starttag erfasst. Jetzt iteriert der Code von Start bis Ende und legt für jeden Tag einen Eintrag an.
+- Variablen-Shadowing behoben (`start`/`end` der Zeitfenster-Berechnung hießen wie die Event-Felder) → umbenannt zu `window_start`/`window_end`.
+
+**`reiseagent/agents/calendar_agent.py`**:
+- Neue Hilfsfunktion `_build_day_lines(events, days_ahead)`: erzeugt für **jeden** Tag im Zeitraum eine Prompt-Zeile — auch für Tage ohne Termin („kein Termin"). Bisher sah das LLM nur Tage mit Einträgen, wodurch leere (= freie) Tage nie bewertet wurden.
+- `interpret_calendar(events, days_ahead=14)`: nutzt jetzt `_build_day_lines`, schickt alle Tage an das LLM. `max_tokens` auf 1200 erhöht (14 Tage JSON).
+- Fallback verbessert: statt der alten Marker-only-Logik (`find_free_days`) gilt jetzt „Tag mit Termin = belegt, sonst frei". Dadurch sind auch ohne LLM Arbeits-/Urlaubstage korrekt belegt.
+- `get_truly_free_days`: reicht `days_ahead` an `interpret_calendar` durch; `find_free_days`-Import entfernt.
+
+**`reiseagent/test_calendar.py`**:
+- `load_dotenv()` am Anfang ergänzt — **kritisch**: ohne `.env` ist `GROQ_API_KEY` leer, der LLM-Aufruf scheitert still und der Fallback markiert alle Tage als frei. Das war der Grund, warum im Test Arbeitstage fälschlich als „frei" erschienen.
+- Schritt 2 nutzt jetzt `_build_day_lines`, damit der angezeigte Prompt exakt dem entspricht, was das LLM wirklich bekommt (inkl. leerer Tage).
+
+**`reiseagent/providers/telegram.py`**:
+- `_create_callback_token(...)` bekommt einen Parameter `kind="flight"` (Default unverändert → Flug-Flow bleibt gleich). Damit lassen sich Vorschlags-Callbacks von Flug-Verspätungs-Callbacks unterscheiden.
+- `send_suggestion_proposal(trip, suggestion, home_city="Berlin")`: erzeugt Tokens mit `kind="suggestion"` und legt `suggestion_date` + `home_city` in den Token-Daten ab, damit der Callback-Handler daraus einen Plan bauen kann.
+
+**`reiseagent/scheduler.py`**:
+- `run_weekly_suggestions` reicht `home_city` an `send_suggestion_proposal` durch.
+
+**`reiseagent/main.py`**:
+- Neue Funktion `_handle_telegram_suggestion_decision(action, callback_data)` — die bisher fehlende Empfangs-Seite: bei `accept` wird ein echter 1-Tages-Plan für die Heimatstadt am freien Tag erstellt (`coordinator.handle_plan_request` mit `auto=True`), als Trip gespeichert, per Telegram gesendet und der Vorschlag als angenommen markiert. Bei `reject` werden die Vorschläge des Tages in `profile_store` als abgelehnt markiert.
+- Callback-Loop verzweigt jetzt nach `callback_data["kind"]`: `suggestion` → neuer Handler, sonst → bestehender Flug-Handler `_handle_telegram_proposal_decision`.
+
+### Betroffene Dateien
+- `reiseagent/providers/calendar.py`
+- `reiseagent/agents/calendar_agent.py`
+- `reiseagent/test_calendar.py`
+- `reiseagent/providers/telegram.py`
+- `reiseagent/scheduler.py`
+- `reiseagent/main.py`
+
+### Tests
+- Import-/Syntax-Check aller geänderten Dateien bestanden.
+- Mehrtägiges Event (Urlaub 3.–5. Juli) → erscheint als drei getrennte Tageseinträge statt nur am 3. Juli.
+- `_build_day_lines` mit gemischten Events → leere Tage erscheinen als „kein Termin", Termine korrekt zugeordnet.
+- Flug-Callback unverändert: `_create_callback_token` ohne `kind` → Default `"flight"` → alter Pfad.
+- Vorschlags-Callback: `kind="suggestion"` → neuer Handler greift, erstellt Plan bzw. lehnt ab.
+
+### Bekannte Einschränkungen
+- Alte Telegram-Buttons (vor diesem Fix erzeugt) bleiben ungültig — nur nach Server-Neustart neu erzeugte Vorschläge funktionieren.
+- Beim Annehmen kann der Telegram-Lade-Kreisel kurz verzögern, da die KI den Plan erst erstellt; der Plan wird trotzdem zuverlässig gesendet.
+
+**Breaking Change:** Nein — `_create_callback_token` ist abwärtskompatibel (`kind` hat Default), Flug-Verspätungs-Flow unverändert. `get_calendar_events`-Rückgabeshape pro Eintrag unverändert (nur mehr Einträge bei Mehrtages-Events).
+
+---
+
+## [2026-06-28] Feature: Phase 4 — Proaktiver Scheduler + Telegram-Vorschlagskarte
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-28  
+**Autor:** Valeriu  
+
+### Zweck
+Der Agent war bisher rein reaktiv — er hat nur gehandelt, wenn der Nutzer explizit etwas angefragt hat. Phase 4 macht ihn proaktiv: Einmal pro Woche (samstags) liest das System den Google-Kalender, lässt ein LLM die Einträge intelligent interpretieren (nicht mehr nur „kein Termin = frei"), erstellt für wirklich freie Tage personalisierte Freizeitvorschläge und schickt sie per Telegram mit [Ja, planen!] / [Nein, danke]-Buttons an den Nutzer. Der Nutzer behält die Kontrolle — der Agent schlägt vor, der Mensch entscheidet.
+
+Zusätzlich wurde die Profil-Trennung umgesetzt: Automatische Vorschläge mischen Profil-Interessen ein, manuelle Reisen (Nutzer füllt Formular aus) tun das nicht mehr.
+
+### Was wurde geändert
+
+**`reiseagent/agents/calendar_agent.py`** *(neu)*:
+- `interpret_calendar(events)` — schickt rohe Kalendereinträge an das LLM mit dem `INTERPRET_CALENDAR`-Prompt. Das LLM stuft jeden Tag als `free` oder `busy` ein und begründet das kurz. Erkennt z.B. „Arbeit 8–18 Uhr" als belegt und Feiertage als frei.
+- `_parse_calendar_response(raw)` — parst die JSON-Antwort des LLM; bei ungültigem JSON `None` zurückgeben.
+- Qualitäts-Gate + Fallback: Bei fehlerhafter LLM-Antwort greift die deterministische `find_free_days`-Methode als Rückfall. `llm.log_step` nach jedem Interpretationsaufruf.
+- `get_truly_free_days(days_ahead=14)` — Einstiegsfunktion: liest Kalender, lässt LLM interpretieren, gibt nur vollständig `free` eingestufte Tage zurück (keine `partly`-Tage).
+
+**`reiseagent/prompts.py`**:
+- Neues Template `INTERPRET_CALENDAR` (Deutsch): Regeln für free/busy-Einstufung, Feiertage = frei, kurze Termine (Gym, Arzt < 2h) = frei. Antwort als JSON-Liste.
+
+**`reiseagent/agents/free_time_detector.py`**:
+- Komplett umgeschrieben: nutzt jetzt `calendar_agent.get_truly_free_days()` statt der alten Marker-only-Heuristik (`REISEAGENT_BLOCK_MARKER`). Speichert erkannte freie Tage in `profile_store.replace_free_days`.
+
+**`reiseagent/providers/telegram.py`**:
+- Neue Funktion `send_suggestion_proposal(trip, suggestion)` — schickt einen Freizeitvorschlag per Telegram mit Inline-Buttons `✅ Ja, planen!` und `❌ Nein, danke`. Nutzt denselben Callback-Token-Mechanismus wie `send_flight_delay_proposal`. `telegram.py` selbst wurde dabei strukturell nicht verändert — nur eine neue Funktion ergänzt.
+
+**`reiseagent/scheduler.py`** *(neu)*:
+- `scheduler_loop()` — Hintergrundthread, der stündlich prüft ob heute Samstag ist.
+- `_should_run_today()` — Wochentag-Guard (`weekday() == 5`), verhindert Mehrfachlauf am selben Tag via `_last_run_date`.
+- `run_weekly_suggestions()` — Hauptablauf: freie Tage erkennen → Vorschläge erstellen (max. 3) → per Telegram senden. Nutzt den neuesten gespeicherten Trip für die Callback-Tokens; falls kein Trip vorhanden, wird ein leerer Platzhalter-Trip angelegt.
+
+**`reiseagent/agents/coordinator.py`**:
+- Profil-Interessen (`PROFILE_TO_INTEREST`-Mapping) werden jetzt **nur noch** eingemischt, wenn `request.get("auto") == True`. Manuelle Reisen (Nutzer-Formular) erhalten die Profil-Interessen nicht mehr automatisch. `request["interests"]` bleibt in beiden Fällen vollständig gesetzt.
+
+**`reiseagent/main.py`**:
+- `import scheduler` ergänzt, `send_suggestion_proposal` zum Telegram-Import hinzugefügt.
+- Neue Variable `_scheduler_thread_started` als Einmal-Startschutz.
+- In `start_background_threads`: vierter Thread `scheduler.scheduler_loop` (daemon) gestartet.
+- Neuer Endpoint `POST /api/scheduler/run` — manueller Trigger für Tests: `POST /api/scheduler/run` in Swagger aufrufen — der komplette Ablauf (Kalender lesen → LLM interpretieren → Vorschläge erstellen → Telegram senden) läuft sofort durch, ohne auf Samstag warten zu müssen.
+
+### Betroffene Dateien
+- `reiseagent/agents/calendar_agent.py` *(neu)*
+- `reiseagent/prompts.py`
+- `reiseagent/agents/free_time_detector.py`
+- `reiseagent/providers/telegram.py`
+- `reiseagent/scheduler.py` *(neu)*
+- `reiseagent/agents/coordinator.py`
+- `reiseagent/main.py`
+
+### Tests
+- Syntax-Check aller geänderten Dateien bestanden (`OK — alle Dateien geladen ohne Fehler`).
+- `POST /api/scheduler/run` manuell auslösen → Vorschläge werden erstellt und in DB gespeichert; bei konfiguriertem Telegram-Bot erscheinen sie mit Buttons in der Gruppe.
+- Wochentag-Guard: zweimaliges Aufrufen von `run_weekly_suggestions` am selben Tag → zweiter Aufruf übersprungen.
+- Manuelle Reise ohne `auto`-Flag → Profil-Interessen werden nicht eingemischt.
+- Kein Kalender konfiguriert → `get_truly_free_days` gibt leere Liste zurück, kein Crash.
+- LLM-Fehler bei Kalender-Interpretation → deterministischer Fallback greift, kein Crash.
+
+**Breaking Change:** Nein — `handle_plan_request`-Signatur unverändert. Bestehende Aufrufe ohne `auto`-Flag verhalten sich jetzt korrekt (kein Profil-Merge mehr bei manuellen Reisen — das war der gewollte Verhaltenswechsel). `providers/telegram.py` strukturell nicht verändert.
+
+---
+
+## [2026-06-28] Feature: Phase 3 — Memory / RAG (Semantisches Nutzergedächtnis)
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-28  
+**Autor:** Valeriu  
+
+### Zweck
+Der Reiseplan war bisher vollständig generisch — die KI wusste nichts darüber, wer der Nutzer ist. Telegram-Nachrichten und E-Mails wurden zwar schon eingelesen und auf Schlüsselwörter untersucht, aber niemals als Kontext an den Planer weitergegeben. Phase 3 gibt dem System ein semantisches Gedächtnis: Jede eingelesene Nachricht wird zusammen mit einem mathematischen Inhalts-Fingerabdruck (Embedding) gespeichert. Beim Erstellen eines Reiseplans oder Freizeitvorschlags sucht das System automatisch die thematisch passendsten Nachrichten heraus und fügt sie dem Prompt hinzu — damit die KI einen personalisierten statt generischen Plan erstellt.
+
+### Was wurde geändert
+
+**`reiseagent/memory.py`** *(neu)*:
+- `store_message(source, date, text)` — speichert eine Nachricht mit ihrem Embedding (sentence-transformers `all-MiniLM-L6-v2`) in der Datenbank. Duplikate (gleiche `source + date + text`) werden übersprungen. Bei mehr als 500 gespeicherten Nachrichten werden die ältesten automatisch gelöscht.
+- `retrieve_context(query, k=4)` — berechnet den Embedding-Vektor für eine Suchanfrage, vergleicht ihn per Cosine-Ähnlichkeit (`numpy`) mit allen gespeicherten Vektoren und gibt die Top-k Nachrichten zurück.
+- Modell-Lazy-Loading: Das Embedding-Modell wird einmalig beim ersten Aufruf geladen (~5–10 s) und danach im Speicher gehalten. Terminal-Meldung beim Laden.
+
+**`reiseagent/profile_store.py`**:
+- Neue Tabelle `messages(id, source, date, text, embedding BLOB, saved_at)` in `init_db` — ein Eintrag pro Nachricht, `UNIQUE(source, date, text)` verhindert Duplikate.
+
+**`reiseagent/agents/profile_learner.py`**:
+- `import memory` ergänzt.
+- `learn_from_telegram`, `learn_from_gmail`, `learn_from_imap`: je ein `memory.store_message(...)` Aufruf am Ende der Schleife hinzugefügt — Nachrichten werden ab jetzt zusätzlich zur Schlüsselwort-Extraktion auch als Volltexte mit Embedding gespeichert.
+
+**`reiseagent/prompts.py`**:
+- `CURATE_PLAN`: optionaler Block `{context_block}` vor den Regeln eingefügt — wenn Kontext vorhanden, erscheint „Nutzer-Kontext (aus Nachrichten): ..."; wenn leer, bleibt der Prompt unverändert.
+- `SUGGESTION_DAY`: analog — `{context_block}` vor dem JSON-Antwort-Block eingefügt.
+
+**`reiseagent/agents/planning.py`**:
+- `import memory` ergänzt.
+- `_curate_plan`: ruft `memory.retrieve_context(destination, k=4)` auf, baut `context_block` und fügt ihn in den `CURATE_PLAN`-Prompt ein. `llm.log_step("memory", ...)` nach jedem Abruf.
+
+**`reiseagent/agents/suggestion_agent.py`**:
+- `import memory` ergänzt.
+- `create_suggestion_for_day`: ruft `memory.retrieve_context(free_date + home_city, k=4)` auf, baut `context_block` und fügt ihn in den `SUGGESTION_DAY`-Prompt ein. `llm.log_step("memory", ...)` nach jedem Abruf.
+
+**`reiseagent/requirements.txt`**:
+- `sentence-transformers` und `numpy` eingetragen.
+
+### Betroffene Dateien
+- `reiseagent/memory.py` *(neu)*
+- `reiseagent/profile_store.py`
+- `reiseagent/agents/profile_learner.py`
+- `reiseagent/prompts.py`
+- `reiseagent/agents/planning.py`
+- `reiseagent/agents/suggestion_agent.py`
+- `reiseagent/requirements.txt`
+
+### Tests
+- `memory.store_message("telegram", "2026-06-28", "Wir wollen mit den Kindern nach Paris, eher Museen")` gespeichert → `retrieve_context("Paris")` liefert sie als Top-Treffer.
+- Zweite Nachricht (Jazz-Konzertticket) gespeichert → `retrieve_context("Musik Veranstaltung")` liefert sie als Top-Treffer.
+- Semantische Trennung korrekt: Paris-Query findet Paris-Nachricht zuerst, Musik-Query findet Konzert-Nachricht zuerst.
+- Leere Datenbank → `retrieve_context` gibt `[]` zurück, `context_block` wird weggelassen, kein Crash.
+- Duplikat-Schutz: gleiche Nachricht zweimal einspeichern → nur ein Eintrag in der DB.
+
+**Breaking Change:** Nein — `CURATE_PLAN`- und `SUGGESTION_DAY`-Prompts erhalten `context_block` als neues Pflichtfeld, das von `planning.py` und `suggestion_agent.py` immer befüllt wird (entweder mit Inhalt oder leerem String). Alle anderen Signaturen unverändert. `providers/telegram.py` nicht angefasst.
+
+---
+
+## [2026-06-28] Refactor: Phase 2 Nachtrag — Places-Fix (PHASE_B Teil 1)
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-28  
+**Autor:** Valeriu  
+
+### Zweck
+Die in `IMPLEMENTIERUNGSPLAN_PHASE_B.md` beschriebenen Places-Fixes waren in Phase 2 noch offen: Der Kandidaten-Pool war zu klein und zu stark gefiltert, sodass das LLM (Phase 2) nicht genug gute Orte zur Auswahl bekam. Außerdem waren Restaurants vom Filter blockierbar, und stadtspezifische Hardcode-Listen verhinderten echte API-basierte Pläne.
+
+### Was wurde geändert
+
+**`reiseagent/providers/places.py`**:
+- **`_category_allowed_by_interests`:** `food` gibt jetzt immer `True` zurück — Restaurants werden nie mehr durch fehlende Interesse-Angabe blockiert.
+- **`_quality_score` vereinfacht:** Hauptsignal ist jetzt `rate * 6` (OpenTripMap-Rate 0–7 → 0–42 Punkte) plus kleiner Kategorie-Bonus. Entfernt: `IMPORTANT_NAME_WORDS`-Bonus (+60), `wikipedia`-Bonus (+10), `wikidata`-Bonus (+6) und die −80-Strafen (Müll wird bereits durch `_is_bad_place` hart gefiltert). `IMPORTANT_NAME_WORDS` bleibt für `_is_bad_place_name` erhalten.
+- **Hard-Cutoff gesenkt:** `quality_score >= 35` → `>= 10` — damit überleben ~50 statt ~9 Kandidaten den Filter und das LLM bekommt einen vollständigen Pool.
+- **`CITY_HIGHLIGHTS`-Dict entfernt** (163 Zeilen, Hardcode-Listen für Paris, Rom, Berlin, London etc.) samt `_get_city_key`, `_get_city_highlight_activities`.
+- **`GENERIC_ACTIVITIES`-Liste entfernt** (5 generische Platzhalter-Aktivitäten). Bei API-Ausfall gibt `get_places` jetzt eine leere Liste zurück statt Dummy-Aktivitäten.
+- **`_tags_for_category` entfernt** (wurde nur von `_get_city_highlight_activities` genutzt).
+- **`get_places` vereinfacht:** Ruft direkt `_fetch_from_opentripmap` auf — keine Highlight-/Berlin-Fallback-Zweige mehr.
+- **`from data.mock_berlin import BERLIN_ACTIVITIES`** Import entfernt.
+
+### Betroffene Dateien
+- `reiseagent/providers/places.py`
+
+### Tests
+- Syntax-Check bestanden.
+- `_category_allowed_by_interests('food', [])` → `True` (vorher: `False`).
+- `_quality_score` gibt Werte im Bereich 0–100 zurück, ohne IMPORTANT_NAME_WORDS-Abhängigkeit.
+- `get_places` gibt bei fehlendem API-Key leere Liste zurück (kein Crash, kein Fallback auf Dummy-Daten).
+
+**Breaking Change:** Nein — `get_places(destination, interests)`-Signatur unverändert. `_normalize_category` erhalten (wird von `_rank_and_deduplicate` genutzt). `providers/telegram.py` nicht angefasst.
+
+---
+
+## [2026-06-28] Feature: Phase 2 — Semantische Dedup, LLM-Kurator, Zeit-/Routen-Agent
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-28  
+**Autor:** Valeriu  
+
+### Zweck
+Drei Kernprobleme behoben: (1) Sehenswürdigkeiten wie Notre-Dame tauchten doppelt auf, weil Namens-Varianten aus verschiedenen Quellen nicht erkannt wurden. (2) Die Aktivitätsauswahl war rein deterministisch — jetzt kuratiert ein LLM den gesamten Plan. (3) Uhrzeiten wurden mechanisch berechnet — jetzt weist ein LLM realistische Start-/Endzeiten und Fahrtzeiten zu.
+
+### Was wurde geändert
+
+**`reiseagent/providers/places.py`**:
+- `import random` entfernt, `import math`, `import difflib`, `import unicodedata` ergänzt.
+- Drei neue Hilfsfunktionen: `_ascii_normalize` (Akzente entfernen), `_strip_fill_words` (Füllwörter wie „cathedral", „museum", „de" entfernen), `_is_same_place` (Kernlogik der semantischen Dedup).
+- `_is_same_place` erkennt Duplikate wenn: Koordinaten < 150 m voneinander entfernt **oder** Namens-Ähnlichkeit via `difflib.SequenceMatcher` ≥ 0.82 (nach Akzent-/Füllwort-Normalisierung).
+- `_rank_and_deduplicate`: zweite Dedup-Runde mit `_is_same_place` nach der bisherigen Exakt-Namens-Dedup. `random.shuffle` entfernt (LLM sieht stabile, nach `quality_score` sortierte Liste). Pool-Grenze `[:30]` → `[:50]`.
+
+**`reiseagent/prompts.py`**:
+- `CURATE_PLAN` (Deutsch): weist das LLM an, aus bis zu 50 Kandidaten einen abwechslungsreichen Mehrtagsplan zu kuratieren. Regeln: keine Duplikate, ≥ 4 Aktivitäten/Tag, max. 2 gleiche Kategorie, mind. 1 food/Tag. Antwort als JSON `{"tage": {"1": [ids...], ...}}`.
+- `SCHEDULE_DAY` (Deutsch): weist das LLM an, für eine geordnete Aktivitätsliste realistische Uhrzeiten und Fahrtzeiten festzulegen. Regeln: Mahlzeiten-Anker (Mittag ≥ 12:00, Abend ≥ 18:30), kein Slot nach 23:59. Antwort als JSON-Liste.
+
+**`reiseagent/agents/time_route_agent.py`** *(neu)*:
+- `schedule_times_and_routes(ordered_activities, day_start) -> list`: LLM legt `start_time`, `end_time`, `travel_to_next_minutes` für jeden Slot fest.
+- Qualitäts-Gate: JSON parsierbar? Richtige Anzahl Einträge? Alle IDs bekannt? `end > start`? Nichts nach 23:59? Keine Überschneidungen?
+- Bei Verstoß: 1× Repair-Prompt. Danach LLM-Ausgabe übernehmen (kein deterministischer Fallback — Team-Entscheidung).
+- Bei komplett leerem Ergebnis: `planning.py` greift auf deterministisches Slot-Ting zurück.
+
+**`reiseagent/agents/planning.py`**:
+- Neue Hilfsfunktionen: `_build_candidate_text`, `_build_weather_summary`, `_validate_curate_response`, `_parse_curate_response`, `_curate_plan`, `_resolve_activities`.
+- `_curate_plan`: LLM kuratiert **den gesamten Mehrtagsplan auf einmal** (alle Tage, Top-50-Kandidaten). Qualitäts-Gate → bei Fehler 1× Repair → bei erneutem Fehler Fallback auf `pick_activities_for_day` je Tag.
+- `_resolve_activities`: IDs aus LLM-Antwort → vollständige Activity-Dicts mit `estimated_cost_total` und `score` (Budget/Streamlit-Felder vollständig).
+- `_deterministic_slots`: bisheriges Zeitslotting als Sicherheitsnetz (nur wenn Zeit-Agent komplett leer liefert).
+- `create_plan`: ruft zuerst `_curate_plan`, dann `time_route_agent.schedule_times_and_routes` auf. Beide mit Fallback abgesichert. **Signatur unverändert.**
+
+### Betroffene Dateien
+- `reiseagent/providers/places.py`
+- `reiseagent/prompts.py`
+- `reiseagent/agents/time_route_agent.py` *(neu)*
+- `reiseagent/agents/planning.py`
+
+### Tests
+- Syntax-Check aller 4 Dateien bestanden.
+- Notre-Dame-Varianten (18 m Abstand) → korrekt als Duplikat erkannt.
+- Louvre/Tuileries (503 m, verschiedene Namen) → korrekt als verschieden erkannt.
+- `Louvre Musée` vs `Louvre Museum` (keine Koordinaten, Namens-Ähnlichkeit) → korrekt zusammengeführt.
+
+**Breaking Change:** Nein — `create_plan`- und `get_places`-Signaturen unverändert, Activity-Dict-Shape vollständig erhalten. `providers/telegram.py` nicht angefasst.
+
+---
+
+## [2026-06-28] Refactor: Phase 1 — LangGraph-Orchestrator für Chat-Routing
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-28  
+**Autor:** Valeriu  
+
+### Zweck
+Die ~1300 Zeilen Regex-Routing in `handle_chat_message` wurden durch einen LangGraph-Graphen ersetzt, in dem ein LLM-Orchestrator per Tool-Calling entscheidet, welcher bestehende Handler ausgeführt wird. Die Handler selbst und ihre gesamte Parse-Logik bleiben unverändert; nur die Klassifikation übernimmt jetzt das LLM.
+
+### Was wurde geändert
+
+**`reiseagent/llm.py`**:
+- `call_tools(agent_name, messages, tools, prompt_id, model)` ergänzt — schickt eine Nachrichtenliste mit Tool-Schemas an Groq und gibt `("tool", name, args)` oder `("text", content, {})` zurück. Bei fehlendem API-Key oder Fehler: `("text", "", {})` (kein Crash).
+
+**`reiseagent/prompts.py`**:
+- Neues Template `ORCHESTRATOR` (Deutsch): weist das LLM an, genau ein Tool für die Nutzeranfrage auszuwählen.
+
+**`reiseagent/graph.py`** *(neu)*:
+- `TripState` TypedDict: `trip`, `message`, `reply`, `tool_name`.
+- 9 Tool-Schemas (Deutsch): `change_time`, `replan_day`, `suggest_alternatives`, `delete_activity`, `fill_plan`, `replace_activity`, `add_activity`, `sync_calendar`, `answer_question`.
+- `_orchestrator_node`: ruft `llm.call_tools()` auf, setzt `tool_name`; ungültiges/kein Tool → Default `answer_question`.
+- Ein Handler-Knoten pro Tool (lazy import von coordinator, vermeidet Circular Import).
+- Bedingte Kante Orchestrator → Tool-Knoten → END.
+- Graph wird einmalig kompiliert (`_compiled_graph`-Cache).
+- `run_chat(trip, message) -> dict`: Einstiegsfunktion für coordinator.
+
+**`reiseagent/agents/coordinator.py`**:
+- `handle_chat_message`: Regex-Kette (`_try_sync_calendar_from_chat` / `_try_apply_plan_change` / `_groq_response`) entfernt, ersetzt durch `graph.run_chat(trip, message)`.
+- Alle Handler-Funktionen (`_change_time_from_chat`, `_replan_day_or_section_from_chat`, `_suggest_alternatives_from_chat`, `_delete_activity_from_chat`, `_fill_plan_from_chat`, `_replace_activity_from_chat`, `_add_activity_from_chat`, `_try_sync_calendar_from_chat`, `_groq_response`) bleiben vollständig erhalten — sie werden jetzt als Tool-Implementierungen aufgerufen.
+- Regex-Helfer (`_is_clear_*`, `_category_from_text` etc.) vorerst stehen gelassen.
+
+**`reiseagent/requirements.txt`**:
+- `langgraph` eingetragen.
+
+### Betroffene Dateien
+- `reiseagent/llm.py`
+- `reiseagent/prompts.py`
+- `reiseagent/graph.py` *(neu)*
+- `reiseagent/agents/coordinator.py`
+- `reiseagent/requirements.txt`
+
+### Tests
+- Syntax-Check aller 4 geänderten/neuen Dateien bestanden.
+- `call_tools` ohne API-Key: gibt `("text", "", {})` zurück, kein Crash.
+- Graph kompiliert ohne Fehler.
+- `run_chat` ohne API-Key: Orchestrator wählt `answer_question` → `_rule_based_response` antwortet korrekt.
+
+**Breaking Change:** Nein — `handle_chat_message`-Signatur und Rückgabe-Shape (`message`, `agent_insights`, `trace`) identisch. Aufrufer `ui_service.send_chat_command` und `main.py /chat` unverändert. `providers/telegram.py` nicht angefasst.
+
+---
+
+## [2026-06-28] Refactor: Phase 0 — Zentrales `llm.py`, `prompts.py` und Trace-Logging
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-06-28  
+**Autor:** Valeriu  
+
+### Zweck
+Alle vier verstreuten Groq-Inline-Aufrufe wurden durch eine einzige zentrale Schnittstelle ersetzt. Ziel: einheitliches Logging, ein sichtbarer Live-Trace pro Planungsauftrag und alle Prompt-Texte an einem Ort — ohne dass sich das Verhalten ändert.
+
+### Was wurde geändert
+
+**`reiseagent/llm.py`** *(neu)*:
+- `call(agent_name, prompt, prompt_id, variables, max_tokens, model)` — einziger Groq-Zugang im Projekt. Kein API-Key oder Fehler → `return None` (kein Crash).
+- Internes Logging pro Aufruf: Agent-Name, Prompt-ID, gekürzte Antwort.
+- Live-`print` im Terminal bei jedem LLM-Aufruf (z. B. `[suggestion_agent] LLM → 312 Zeichen`).
+- Trace-API: `reset_trace()`, `log_step(agent, info, tool)`, `get_trace()` — speichert alle Schritte einer Planung in einer Modul-Liste.
+
+**`reiseagent/prompts.py`** *(neu)*:
+- Vier benannte Prompt-Templates verbatim übernommen: `DAILY_BRIEF`, `NAVIGATION_REMINDER`, `SUGGESTION_DAY`, `CHAT_QA`.
+- Hilfsfunktion `fill(template, **vars)` — wirft `KeyError` bei fehlender Variable, damit Fehler früh auffallen.
+
+**`reiseagent/agents/daily_brief.py`**:
+- Inline-Groq-Aufruf (Z. 62) durch `llm.call(..., prompt_id="DAILY_BRIEF")` ersetzt.
+- Fallback-Text bei `None` erhalten.
+
+**`reiseagent/agents/navigation.py`**:
+- Inline-Groq-Aufruf (Z. 28) durch `llm.call(..., prompt_id="NAVIGATION_REMINDER")` ersetzt.
+- Fallback-Text bei `None` erhalten.
+
+**`reiseagent/agents/suggestion_agent.py`**:
+- Inline-Groq-Aufruf (Z. 121) durch `llm.call(..., prompt_id="SUGGESTION_DAY")` ersetzt.
+- JSON-Parse-Block und `_pick_activities`-Fallback vollständig erhalten.
+
+**`reiseagent/agents/coordinator.py`**:
+- `_groq_response()`: Inline-Groq durch `llm.call(..., prompt_id="CHAT_QA")` ersetzt; bei `None` → `_rule_based_response`.
+- `handle_plan_request()`: `llm.reset_trace()` am Anfang, `"trace": llm.get_trace()` additiv im Rückgabe-Dict.
+- `handle_chat_message()`: analog — Trace in alle drei Rückgabepfade (calendar_sync, plan_change, groq_response) eingefügt.
+
+### Betroffene Dateien
+- `reiseagent/llm.py` *(neu)*
+- `reiseagent/prompts.py` *(neu)*
+- `reiseagent/agents/daily_brief.py`
+- `reiseagent/agents/navigation.py`
+- `reiseagent/agents/suggestion_agent.py`
+- `reiseagent/agents/coordinator.py`
+
+### Tests
+- Syntax-Check aller 6 Dateien bestanden.
+- Smoke-Test ohne API-Key: `llm.call()` gibt `None` zurück, Trace enthält `skipped`-Eintrag, `fill()` wirft `KeyError` bei fehlender Variable.
+- Fallback-Test `navigation_agent`: Route ohne API-Key liefert korrekten Text inkl. 10-Minuten-Puffer.
+
+**Breaking Change:** Nein — alle bestehenden Signaturen unverändert, Prompts verbatim, `"trace"`-Key additiv (bestehende Konsumenten ignorieren ihn). `providers/telegram.py` nicht angefasst.
+
+---
+
 ## [2026-06-23] Fix: Phase A — Kategorie-Vokabular und intelligente Tagesplanung
 
 **Status:** Merged  

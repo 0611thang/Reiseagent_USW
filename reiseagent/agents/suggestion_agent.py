@@ -1,8 +1,10 @@
 import json
-import os
 from datetime import date
 
+import llm
+import prompts
 import profile_store
+import memory
 from providers.places import get_places
 
 
@@ -86,8 +88,30 @@ def create_suggestion_for_day(
     poi_text = "\n".join(poi_lines) if poi_lines else "Keine spezifischen POIs verfuegbar."
     day_name = date.fromisoformat(free_date).strftime("%A, %d.%m.%Y")
 
-    api_key = os.getenv("GROQ_API_KEY", "")
-    if not api_key:
+    avoid_text = ", ".join(already_suggested) if already_suggested else "keine"
+
+    hits = memory.retrieve_context(f"{free_date} {home_city}", k=4)
+    llm.log_step("memory", f"{len(hits)} relevante Nachrichten gefunden")
+    if hits:
+        context_block = "Nutzer-Kontext (aus Nachrichten):\n" + "\n".join(f"- {h}" for h in hits) + "\n\n"
+    else:
+        context_block = ""
+
+    raw = llm.call(
+        "suggestion_agent",
+        prompts.fill(
+            prompts.SUGGESTION_DAY,
+            profile_summary=profile_summary,
+            poi_text=poi_text,
+            day_name=day_name,
+            avoid_text=avoid_text,
+            context_block=context_block,
+        ),
+        prompt_id="SUGGESTION_DAY",
+        max_tokens=400,
+    )
+
+    if raw is None:
         activities = _pick_activities(pois, free_date, already_suggested)
         title = f"Vorschlag fuer {day_name}"
         description = "Basierend auf deinen Interessen empfehlen wir folgende Aktivitaeten."
@@ -101,29 +125,7 @@ def create_suggestion_for_day(
         }
 
     try:
-        from groq import Groq
-
-        avoid_text = ", ".join(already_suggested) if already_suggested else "keine"
-        prompt = f"""Du bist ein persoenlicher Freizeitplaner.
-
-{profile_summary}
-
-Verfuegbare Orte:
-{poi_text}
-
-Der Nutzer hat am {day_name} einen freien Tag.
-Diese bereits vorgeschlagenen Aktivitaeten bitte vermeiden: {avoid_text}
-
-Antworte NUR als JSON ohne Markdown-Backticks:
-{{"title": "Kurzer Titel", "description": "2-3 Saetze warum dieser Tag passt", "activities": ["Aktivitaet 1", "Aktivitaet 2", "Aktivitaet 3"], "highlight": "Das Besondere in einem Satz"}}"""
-
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-        )
-        data = json.loads(response.choices[0].message.content.strip())
+        data = json.loads(raw.strip())
         activities = data.get("activities", [])
         if not activities or any(a in already_suggested for a in activities):
             activities = _pick_activities(pois, free_date, already_suggested)

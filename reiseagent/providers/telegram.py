@@ -12,7 +12,7 @@ def _get_chat_id():
     return os.getenv("TELEGRAM_CHAT_ID", "").strip() or DEFAULT_CHAT_ID
 
 
-def _create_callback_token(trip: dict, proposal_id: str, action: str) -> str:
+def _create_callback_token(trip: dict, proposal_id: str, action: str, kind: str = "flight") -> str:
     callbacks = trip.setdefault("telegram_callbacks", {})
     token = secrets.token_urlsafe(8)
     while token in callbacks:
@@ -22,6 +22,7 @@ def _create_callback_token(trip: dict, proposal_id: str, action: str) -> str:
         "action": action,
         "trip_id": trip["id"],
         "proposal_id": proposal_id,
+        "kind": kind,
     }
     return token
 
@@ -208,6 +209,78 @@ def send_flight_delay_proposal(trip: dict, proposal: dict, flight_updates: dict)
         return success
     except Exception as error:
         print(f"[telegram] Proposal-Nachricht fehlgeschlagen: {type(error).__name__}")
+        return False
+
+
+def send_suggestion_proposal(trip: dict, suggestion: dict, home_city: str = "Berlin") -> bool:
+    """Sendet einen Freizeitvorschlag per Telegram mit [Annehmen]/[Ablehnen]-Buttons."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return False
+
+    proposal_id = suggestion.get("date", "unknown")
+    accept_token = _create_callback_token(trip, str(proposal_id), "accept", kind="suggestion")
+    reject_token = _create_callback_token(trip, str(proposal_id), "reject", kind="suggestion")
+    # Vorschlags-Infos in den Tokens ablegen, damit der Callback-Handler
+    # daraus einen Plan bauen kann (Datum + Heimatstadt).
+    for tok in (accept_token, reject_token):
+        trip["telegram_callbacks"][tok]["suggestion_date"] = suggestion.get("date", "")
+        trip["telegram_callbacks"][tok]["home_city"] = home_city
+    saved_trip = store.update_trip(
+        trip["id"],
+        {"telegram_callbacks": trip["telegram_callbacks"]},
+    )
+    if not saved_trip:
+        print("[telegram] Suggestion-Tokens konnten nicht gespeichert werden.")
+        return False
+
+    date_str = suggestion.get("date", "")
+    title = suggestion.get("title", "Freizeitvorschlag")
+    description = suggestion.get("description", "")
+    activities = suggestion.get("activities", [])
+    activities_text = "\n".join(f"• {a}" for a in activities) if activities else ""
+
+    text = (
+        f"🗓️ Freizeitvorschlag für {date_str}\n\n"
+        f"*{title}*\n"
+        f"{description}\n\n"
+        f"{activities_text}\n\n"
+        f"Soll ich einen vollständigen Reiseplan erstellen?"
+    )
+
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "✅ Ja, planen!",
+                    "callback_data": _build_callback_data("accept", accept_token),
+                },
+                {
+                    "text": "❌ Nein, danke",
+                    "callback_data": _build_callback_data("reject", reject_token),
+                },
+            ]
+        ]
+    }
+
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        response = httpx.post(
+            url,
+            json={
+                "chat_id": _get_chat_id(),
+                "text": text,
+                "parse_mode": "Markdown",
+                "reply_markup": keyboard,
+            },
+            timeout=5.0,
+        )
+        success = response.json().get("ok", False)
+        if not success:
+            print(f"[telegram] Suggestion-Nachricht abgelehnt: HTTP {response.status_code}")
+        return success
+    except Exception as error:
+        print(f"[telegram] Suggestion-Nachricht fehlgeschlagen: {type(error).__name__}")
         return False
 
 

@@ -4,6 +4,9 @@ import unicodedata
 import uuid
 from datetime import datetime
 
+import llm
+import prompts
+import graph
 from providers.weather import get_weather_for_trip
 from providers.flights import get_flight_status_for_trip
 import providers.places as places_provider
@@ -25,6 +28,7 @@ PROFILE_TO_INTEREST = {
 
 
 def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
+    llm.reset_trace()
     insights = []
 
     insights.append({
@@ -34,21 +38,23 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
         "summary": "Anfrage analysiert, Agenten werden koordiniert...",
     })
 
-    # Profil-Interessen laden und mit Formular-Interessen zusammenführen
+    # Profil-Interessen nur bei automatischen Vorschlägen (auto=True) einmischen
     request = dict(request)  # Kopie, damit Original nicht verändert wird
     form_interests = list(request.get("interests", []))
-    profile_data = profile_store.get_top_interests(limit=5)
     profile_labels = []
-    for item in profile_data:
-        label = PROFILE_TO_INTEREST.get(item["category"])
-        if label and label not in form_interests:
-            profile_labels.append(label)
-    merged_interests = form_interests + profile_labels
-    request["interests"] = merged_interests
-
     profile_insight_text = ""
-    if profile_labels:
-        profile_insight_text = f" Profil ergänzt: {', '.join(profile_labels)}."
+
+    if request.get("auto"):
+        profile_data = profile_store.get_top_interests(limit=5)
+        for item in profile_data:
+            label = PROFILE_TO_INTEREST.get(item["category"])
+            if label and label not in form_interests:
+                profile_labels.append(label)
+        request["interests"] = form_interests + profile_labels
+        if profile_labels:
+            profile_insight_text = f" Profil ergänzt: {', '.join(profile_labels)}."
+    else:
+        request["interests"] = form_interests
 
     weather = get_weather_for_trip(request, use_mock=use_mock_weather)
     insights.append({
@@ -128,6 +134,7 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
         "weather": weather,
         "all_activities": all_activities,
         "flight_updates": flight_updates,
+        "trace": llm.get_trace(),
     }
 
 
@@ -260,18 +267,10 @@ def _adjust_first_day_for_flight(days: list, flight_updates: dict, request: dict
 
 
 def handle_chat_message(trip: dict, message: str) -> dict:
-    calendar_sync = _try_sync_calendar_from_chat(trip, message)
-    if calendar_sync:
-        return calendar_sync
-
-    plan_change = _try_apply_plan_change(trip, message)
-    if plan_change:
-        return plan_change
-
-    api_key = os.getenv("GROQ_API_KEY", "")
-    if api_key:
-        return _groq_response(trip, message, api_key)
-    return _rule_based_response(trip, message)
+    llm.reset_trace()
+    result = graph.run_chat(trip, message)
+    result["trace"] = llm.get_trace()
+    return result
 
 
 def _try_apply_plan_change(trip: dict, message: str) -> dict | None:
@@ -1573,33 +1572,24 @@ def _chat_change_reply(message: str, changed: bool, calendar_result: dict | None
 
 
 def _groq_response(trip: dict, message: str, api_key: str) -> dict:
-    try:
-        from groq import Groq
-        client = Groq(api_key=api_key)
-        trip_summary = _create_trip_summary(trip)
-
-        prompt = (
-            f"Du bist ein freundlicher Reiseassistent. Hier ist der aktuelle Reiseplan:\n"
-            f"{trip_summary}\n\n"
-            f"Nutzerfrage: {message}\n\n"
-            f"Antworte auf Deutsch, kurz und hilfreich."
-        )
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return {
-            "message": response.choices[0].message.content,
-            "agent_insights": [{
-                "agent_name": "coordinator",
-                "display_label": "Coordinator Agent",
-                "status": "completed",
-                "summary": "Chat-Antwort via Groq API generiert.",
-            }],
-        }
-    except Exception:
+    trip_summary = _create_trip_summary(trip)
+    text = llm.call(
+        "coordinator",
+        prompts.fill(prompts.CHAT_QA, trip_summary=trip_summary, message=message),
+        prompt_id="CHAT_QA",
+        max_tokens=500,
+    )
+    if text is None:
         return _rule_based_response(trip, message)
+    return {
+        "message": text,
+        "agent_insights": [{
+            "agent_name": "coordinator",
+            "display_label": "Coordinator Agent",
+            "status": "completed",
+            "summary": "Chat-Antwort via Groq API generiert.",
+        }],
+    }
 
 
 def _rule_based_response(trip: dict, message: str) -> dict:

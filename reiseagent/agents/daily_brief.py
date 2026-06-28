@@ -1,5 +1,6 @@
 import os
-from groq import Groq
+import llm
+import prompts
 from providers.telegram import get_recent_messages, find_trip_relevant_messages
 from providers.gmail import get_recent_emails, find_trip_relevant_emails
 
@@ -37,34 +38,30 @@ def create_daily_brief(trip, day_number):
         lines = [f"- {m['date']}: {m['text']}" for m in relevant_msgs]
         telegram_section = "Relevante Telegram-Nachrichten:\n" + "\n".join(lines)
 
-    api_key = os.getenv("GROQ_API_KEY", "")
-    if not api_key:
-        return (
-            f"Guten Morgen! Heute ist Tag {day_number} in {destination}.\n"
-            f"Wetter: {weather}.\n"
-            f"Geplant: {', '.join(activities)}.\n"
-            + (f"\nHinweise aus Emails:\n{gmail_section}" if gmail_section else "")
-            + (f"\nHinweise aus Telegram:\n{telegram_section}" if telegram_section else "")
-        )
-
-    client = Groq(api_key=api_key)
-    prompt = (
-        f"Schreibe einen freundlichen Morgenbrief auf Deutsch für Tag {day_number} "
-        f"der Reise nach {destination}.\n"
-        f"Wetter heute: {weather}.\n"
-        f"Geplante Aktivitäten: {', '.join(activities)}.\n"
-        f"{gmail_section}\n"
-        f"{telegram_section}\n"
-        f"Falls Nachrichten vorhanden: kurz erwähnen ob es Konflikte oder wichtige Hinweise gibt. "
-        f"Maximal 6 Sätze, motivierend und persönlich."
-    )
-
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
+    text = llm.call(
+        "daily_brief_agent",
+        prompts.fill(
+            prompts.DAILY_BRIEF,
+            day_number=day_number,
+            destination=destination,
+            weather=weather,
+            activities=", ".join(activities),
+            gmail_section=gmail_section,
+            telegram_section=telegram_section,
+        ),
+        prompt_id="DAILY_BRIEF",
         max_tokens=300,
     )
-    return response.choices[0].message.content
+    if text is not None:
+        return text
+
+    return (
+        f"Guten Morgen! Heute ist Tag {day_number} in {destination}.\n"
+        f"Wetter: {weather}.\n"
+        f"Geplant: {', '.join(activities)}.\n"
+        + (f"\nHinweise aus Emails:\n{gmail_section}" if gmail_section else "")
+        + (f"\nHinweise aus Telegram:\n{telegram_section}" if telegram_section else "")
+    )
 
 
 def get_agent_insight():

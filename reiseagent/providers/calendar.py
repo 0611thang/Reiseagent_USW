@@ -59,20 +59,43 @@ def get_calendar_events(days_ahead=14):
         if not service:
             return []
 
-        start = datetime.combine(date.today(), time.min, tzinfo=timezone.utc)
-        end = start + timedelta(days=days_ahead + 1)
-        result = service.events().list(calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(), singleEvents=True, orderBy="startTime", maxResults=100).execute()
+        window_start = datetime.combine(date.today(), time.min, tzinfo=timezone.utc)
+        window_end = window_start + timedelta(days=days_ahead + 1)
+        result = service.events().list(calendarId="primary", timeMin=window_start.isoformat(), timeMax=window_end.isoformat(), singleEvents=True, orderBy="startTime", maxResults=100).execute()
         events = []
         for item in result.get("items", []):
-            start = item["start"].get("dateTime", item["start"].get("date", ""))
             description = item.get("description", "")
-            events.append({
-                "summary": item.get("summary", ""),
-                "description": description,
-                "start": start[:10],
-                "all_day": "dateTime" not in item["start"],
-                "blocks_reiseagent_day": REISEAGENT_BLOCK_MARKER in description,
-            })
+            summary = item.get("summary", "")
+            blocks = REISEAGENT_BLOCK_MARKER in description
+            is_all_day = "dateTime" not in item["start"]
+
+            if is_all_day:
+                # Ganztaegige Events koennen mehrere Tage umfassen (Google: Ende ist exklusiv).
+                # Wir spalten sie in einen Eintrag pro Tag auf.
+                start_str = item["start"].get("date", "")[:10]
+                end_str = item.get("end", {}).get("date", "")[:10]
+                if not start_str:
+                    continue
+                day = date.fromisoformat(start_str)
+                last = date.fromisoformat(end_str) if end_str else day + timedelta(days=1)
+                while day < last:
+                    events.append({
+                        "summary": summary,
+                        "description": description,
+                        "start": day.isoformat(),
+                        "all_day": True,
+                        "blocks_reiseagent_day": blocks,
+                    })
+                    day += timedelta(days=1)
+            else:
+                start_str = item["start"].get("dateTime", "")[:10]
+                events.append({
+                    "summary": summary,
+                    "description": description,
+                    "start": start_str,
+                    "all_day": False,
+                    "blocks_reiseagent_day": blocks,
+                })
         return events
     except Exception:
         return []

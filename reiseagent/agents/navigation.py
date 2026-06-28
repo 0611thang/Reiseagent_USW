@@ -1,5 +1,5 @@
-import os
-from groq import Groq
+import llm
+import prompts
 
 
 def create_navigation_reminder(activity_name, route):
@@ -10,27 +10,25 @@ def create_navigation_reminder(activity_name, route):
     if not route:
         return f"Bitte rechtzeitig zur Aktivität '{activity_name}' aufbrechen."
 
-    api_key = os.getenv("GROQ_API_KEY", "")
-    if not api_key:
-        total = route["duration_minutes"] + 10
-        return (
-            f"Aufbruch in {total} Minuten für '{activity_name}'. "
-            f"Gehzeit: {route['duration_minutes']} Min ({route['distance_km']} km)."
-        )
-
-    client = Groq(api_key=api_key)
-    prompt = (
-        f"Schreibe eine kurze freundliche Push-Erinnerung auf Deutsch. "
-        f"Aktivität: '{activity_name}'. "
-        f"Gehzeit: {route['duration_minutes']} Minuten, {route['distance_km']} km. "
-        f"Inkl. 10 Minuten Puffer. Maximal 2 Sätze."
-    )
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
+    text = llm.call(
+        "navigation_agent",
+        prompts.fill(
+            prompts.NAVIGATION_REMINDER,
+            activity_name=activity_name,
+            duration_minutes=route["duration_minutes"],
+            distance_km=route["distance_km"],
+        ),
+        prompt_id="NAVIGATION_REMINDER",
         max_tokens=80,
     )
-    return response.choices[0].message.content
+    if text is not None:
+        return text
+
+    total = route["duration_minutes"] + 10
+    return (
+        f"Aufbruch in {total} Minuten für '{activity_name}'. "
+        f"Gehzeit: {route['duration_minutes']} Min ({route['distance_km']} km)."
+    )
 
 
 def get_agent_insight():

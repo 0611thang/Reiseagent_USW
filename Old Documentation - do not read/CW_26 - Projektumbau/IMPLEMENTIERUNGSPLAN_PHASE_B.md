@@ -4,8 +4,8 @@
 > Dateien wie geändert werden, **welche Abhängigkeiten** beachtet werden müssen (damit nichts kaputtgeht),
 > und **welche offenen Fragen** vorher geklärt werden sollten.
 >
-> Architektur-Kontext: [ARCHITEKTUR_PLANUNG_LLM.md](ARCHITEKTUR_PLANUNG_LLM.md) ·
-> Design-Entscheidungen: [ZUKUNFT_NOTIZEN.md](ZUKUNFT_NOTIZEN.md)
+> Architektur-Kontext: [ARCHITEKTUR_PLANUNG_LLM.md](Old%20Documentation%20-%20do%20not%20use/ARCHITEKTUR_PLANUNG_LLM.md) ·
+> Design-Entscheidungen: [ZUKUNFT_NOTIZEN.md](Old%20Documentation%20-%20do%20not%20use/ZUKUNFT_NOTIZEN.md)
 
 ---
 

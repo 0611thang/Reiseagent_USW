@@ -2,6 +2,7 @@ import os
 import re
 from datetime import datetime
 import profile_store
+import memory
 
 INTEREST_CATEGORIES = {
     "musik": ["konzert", "festival", "open air", "band", "livemusik", "ticket", "club", "dj"],
@@ -52,19 +53,21 @@ def learn_from_telegram(messages):
             continue
         _extract_interests_from_text(text, source="telegram")
         _extract_event_from_text(text, source="telegram", date=msg.get("date"))
+        memory.store_message(source="telegram", date=msg.get("date"), text=text)
 
 def learn_from_gmail(emails):
     for email in emails:
         full_text = email.get("subject", "") + " " + email.get("snippet", "")
         _extract_interests_from_text(full_text, source="gmail")
         _extract_event_from_text(full_text, source="gmail")
+        memory.store_message(source="gmail", date=email.get("date"), text=full_text)
 
 def learn_from_imap(emails):
-    # Gleiches Format wie Gmail → Logik direkt wiederverwenden
     for email in emails:
         full_text = email.get("subject", "") + " " + email.get("snippet", "")
         _extract_interests_from_text(full_text, source="imap")
         _extract_event_from_text(full_text, source="imap")
+        memory.store_message(source="imap", date=email.get("date"), text=full_text)
 
 def run_profile_update(telegram_messages=None, gmail_emails=None, imap_emails=None):
     profile_store.init_db()

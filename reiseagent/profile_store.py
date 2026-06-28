@@ -42,6 +42,15 @@ def init_db():
             status TEXT DEFAULT 'pending',
             created_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            date TEXT,
+            text TEXT NOT NULL,
+            embedding BLOB,
+            saved_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(source, date, text)
+        );
     """)
     conn.commit()
     conn.close()

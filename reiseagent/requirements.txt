@@ -11,3 +11,6 @@ google-auth
 google-auth-oauthlib
 google-api-python-client
 requests
+langgraph
+sentence-transformers
+numpy

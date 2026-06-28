@@ -4,7 +4,7 @@
 > zusammenarbeiten: was in den LLM-Prompt fließt, wie Wetter/Eingaben berücksichtigt werden, und wo die
 > Grenze zwischen LLM (kuratiert) und Python (rechnet) verläuft.
 >
-> Stand: 2026-06-23 · Gehört zu [ZUKUNFT_NOTIZEN.md](ZUKUNFT_NOTIZEN.md) (Design-Entscheidungen).
+> Stand: 2026-06-23 · Gehört zu [ZUKUNFT_NOTIZEN.md](../Miscancellous/ZUKUNFT_NOTIZEN.md) (Design-Entscheidungen).
 
 ---
 

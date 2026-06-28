@@ -28,7 +28,9 @@ from providers.telegram import (
     send_plan_update,
     get_callback_updates,
     answer_callback_query,
+    send_suggestion_proposal,
 )
+import scheduler
 from providers.calendar import create_calendar_event, sync_full_plan_to_calendar
 import profile_store
 
@@ -45,6 +47,7 @@ MONITORING_INTERVAL_SECONDS = int(os.getenv("MONITORING_INTERVAL_SECONDS", "1800
 _monitoring_thread_started = False
 _navigation_thread_started = False
 _telegram_thread_started = False
+_scheduler_thread_started = False
 
 
 def _monitoring_loop():
@@ -89,7 +92,7 @@ def _monitoring_loop():
 
 @app.on_event("startup")
 def start_background_threads():
-    global _monitoring_thread_started, _navigation_thread_started, _telegram_thread_started
+    global _monitoring_thread_started, _navigation_thread_started, _telegram_thread_started, _scheduler_thread_started
 
     store.init_db()
 
@@ -113,6 +116,12 @@ def start_background_threads():
         telegram_thread = threading.Thread(target=_telegram_callback_loop, daemon=True)
         telegram_thread.start()
         print("[telegram_callback] Telegram Proposal Buttons gestartet.")
+
+    if not _scheduler_thread_started:
+        _scheduler_thread_started = True
+        scheduler_thread = threading.Thread(target=scheduler.scheduler_loop, daemon=True)
+        scheduler_thread.start()
+        print("[scheduler] Wöchentlicher Vorschlags-Scheduler gestartet (läuft samstags).")
 
 
 class TripRequestBody(BaseModel):
@@ -443,6 +452,17 @@ def run_monitoring_for_trip(trip_id: str):
 def run_monitoring_now():
     return monitoring.monitor_all_active_trips()
 
+
+@app.post("/api/scheduler/run")
+def run_scheduler_now():
+    """Manueller Trigger für den wöchentlichen Vorschlags-Scheduler (für Tests)."""
+    try:
+        scheduler.run_weekly_suggestions()
+        pending = profile_store.get_pending_suggestions()
+        return {"status": "ok", "suggestions_created": len(pending)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
 _telegram_update_offset = None
 
 
@@ -507,6 +527,45 @@ def _handle_telegram_proposal_decision(action: str, trip_id: str, proposal_id: s
     return "Unbekannte Aktion."
 
 
+def _handle_telegram_suggestion_decision(action: str, callback_data: dict) -> str:
+    date_str = callback_data.get("suggestion_date", "")
+    home_city = callback_data.get("home_city", "Berlin")
+
+    if action == "reject":
+        for s in profile_store.get_suggestions_for_date(date_str):
+            profile_store.update_suggestion_status(s["id"], "rejected")
+        return "Vorschlag abgelehnt. Vielleicht beim nächsten Mal!"
+
+    if action == "accept":
+        request = {
+            "destination": home_city,
+            "duration_days": 1,
+            "budget_total": 200.0,
+            "currency": "EUR",
+            "number_of_people": 1,
+            "travel_type": "solo",
+            "interests": [],
+            "start_date": date_str,
+            "departure_date": date_str,
+            "day_start_time": "09:00",
+            "auto": True,
+        }
+        result = coordinator.handle_plan_request(request)
+        trip = store.create_trip(request)
+        new_plan = result["active_plan"]
+        store.update_trip(trip["id"], {
+            "active_plan": new_plan,
+            "agent_insights": result["agent_insights"],
+        })
+        calendar_result = sync_full_plan_to_calendar(new_plan, trip["id"])
+        send_plan_update(new_plan, calendar_synced=calendar_result.get("updated", False))
+        for s in profile_store.get_suggestions_for_date(date_str):
+            profile_store.update_suggestion_status(s["id"], "accepted")
+        return "Super! Ich habe einen Plan erstellt und schicke ihn dir."
+
+    return "Unbekannte Aktion."
+
+
 def _telegram_callback_loop():
     global _telegram_update_offset
 
@@ -542,12 +601,16 @@ def _telegram_callback_loop():
 
                 trip_id = callback_data["trip_id"]
                 proposal_id = callback_data["proposal_id"]
+                kind = callback_data.get("kind", "flight")
 
-                message = _handle_telegram_proposal_decision(
-                    action,
-                    trip_id,
-                    proposal_id,
-                )
+                if kind == "suggestion":
+                    message = _handle_telegram_suggestion_decision(action, callback_data)
+                else:
+                    message = _handle_telegram_proposal_decision(
+                        action,
+                        trip_id,
+                        proposal_id,
+                    )
                 _remove_telegram_callbacks(trip_id, proposal_id)
 
                 if callback_id:

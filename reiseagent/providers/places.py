@@ -1,9 +1,10 @@
 import os
-import random
+import math
+import difflib
+import unicodedata
 
 import httpx
 
-from data.mock_berlin import BERLIN_ACTIVITIES
 from providers.geocoding import get_coordinates
 
 LAST_PLACES_STATUS = "not_loaded"
@@ -104,244 +105,6 @@ IMPORTANT_NAME_WORDS = [
     "residenz",
 ]
 
-# Kleine Demo-Ergaenzung: OpenTripMap bleibt die Hauptquelle, aber diese
-# bekannten Highlights verhindern schwache Pläne für Präsentationsstädte.
-CITY_HIGHLIGHTS = {
-    "paris": [
-        ("Eiffel Tower", "sightseeing", 48.8584, 2.2945),
-        ("Louvre Museum", "museum", 48.8606, 2.3376),
-        ("Arc de Triomphe", "sightseeing", 48.8738, 2.2950),
-        ("Notre-Dame Cathedral", "sightseeing", 48.8530, 2.3499),
-        ("Musee d'Orsay", "museum", 48.8600, 2.3266),
-        ("Montmartre", "walk", 48.8867, 2.3431),
-    ],
-    "rom": [
-        ("Colosseum", "sightseeing", 41.8902, 12.4922),
-        ("Pantheon", "sightseeing", 41.8986, 12.4769),
-        ("Roman Forum", "sightseeing", 41.8925, 12.4853),
-        ("Trevi Fountain", "sightseeing", 41.9009, 12.4833),
-        ("Vatican Museums", "museum", 41.9065, 12.4536),
-        ("Piazza Navona", "walk", 41.8992, 12.4731),
-    ],
-    "rome": [
-        ("Colosseum", "sightseeing", 41.8902, 12.4922),
-        ("Pantheon", "sightseeing", 41.8986, 12.4769),
-        ("Roman Forum", "sightseeing", 41.8925, 12.4853),
-        ("Trevi Fountain", "sightseeing", 41.9009, 12.4833),
-        ("Vatican Museums", "museum", 41.9065, 12.4536),
-        ("Piazza Navona", "walk", 41.8992, 12.4731),
-    ],
-    "berlin": [
-        ("Brandenburg Gate", "sightseeing", 52.5163, 13.3777),
-        ("Museum Island", "museum", 52.5169, 13.4010),
-        ("East Side Gallery", "sightseeing", 52.5050, 13.4397),
-        ("Reichstag Building", "sightseeing", 52.5186, 13.3762),
-        ("Berlin Cathedral", "sightseeing", 52.5191, 13.4010),
-        ("Tiergarten", "walk", 52.5145, 13.3501),
-    ],
-    "barcelona": [
-        ("Sagrada Familia", "sightseeing", 41.4036, 2.1744),
-        ("Park Guell", "walk", 41.4145, 2.1527),
-        ("Casa Batllo", "sightseeing", 41.3917, 2.1649),
-        ("La Rambla", "walk", 41.3809, 2.1730),
-        ("Gothic Quarter", "walk", 41.3839, 2.1762),
-        ("Picasso Museum", "museum", 41.3852, 2.1809),
-    ],
-    "london": [
-        ("Tower Bridge", "sightseeing", 51.5055, -0.0754),
-        ("British Museum", "museum", 51.5194, -0.1270),
-        ("Buckingham Palace", "sightseeing", 51.5014, -0.1419),
-        ("Big Ben", "sightseeing", 51.5007, -0.1246),
-        ("Tower of London", "sightseeing", 51.5081, -0.0759),
-        ("Hyde Park", "walk", 51.5073, -0.1657),
-    ],
-    "istanbul": [
-        ("Hagia Sophia", "sightseeing", 41.0086, 28.9802),
-        ("Blue Mosque", "sightseeing", 41.0054, 28.9768),
-        ("Topkapi Palace", "museum", 41.0115, 28.9834),
-        ("Grand Bazaar", "shopping", 41.0107, 28.9680),
-        ("Galata Tower", "sightseeing", 41.0256, 28.9742),
-        ("Basilica Cistern", "sightseeing", 41.0084, 28.9779),
-    ],
-    "koeln": [
-        ("Cologne Cathedral", "sightseeing", 50.9413, 6.9583),
-        ("Museum Ludwig", "museum", 50.9409, 6.9598),
-        ("Hohenzollern Bridge", "walk", 50.9418, 6.9660),
-        ("Old Town Cologne", "walk", 50.9386, 6.9603),
-        ("Chocolate Museum Cologne", "museum", 50.9319, 6.9642),
-        ("Rheinauhafen", "walk", 50.9255, 6.9654),
-    ],
-    "cologne": [
-        ("Cologne Cathedral", "sightseeing", 50.9413, 6.9583),
-        ("Museum Ludwig", "museum", 50.9409, 6.9598),
-        ("Hohenzollern Bridge", "walk", 50.9418, 6.9660),
-        ("Old Town Cologne", "walk", 50.9386, 6.9603),
-        ("Chocolate Museum Cologne", "museum", 50.9319, 6.9642),
-        ("Rheinauhafen", "walk", 50.9255, 6.9654),
-    ],
-    "mallorca": [
-        ("Palma Cathedral", "sightseeing", 39.5679, 2.6489),
-        ("Serra de Tramuntana", "walk", 39.7300, 2.8500),
-        ("Bellver Castle", "sightseeing", 39.5636, 2.6196),
-        ("Alcudia Old Town", "walk", 39.8532, 3.1214),
-        ("Cuevas del Drach", "sightseeing", 39.5356, 3.3304),
-        ("Cap de Formentor", "walk", 39.9619, 3.2124),
-    ],
-    "amsterdam": [
-        ("Rijksmuseum", "museum", 52.3600, 4.8852),
-        ("Van Gogh Museum", "museum", 52.3584, 4.8811),
-        ("Anne Frank House", "museum", 52.3752, 4.8840),
-        ("Canal Ring", "walk", 52.3702, 4.8952),
-        ("Vondelpark", "walk", 52.3579, 4.8686),
-        ("Dam Square", "sightseeing", 52.3731, 4.8922),
-    ],
-    "new york": [
-        ("Statue of Liberty", "sightseeing", 40.6892, -74.0445),
-        ("Central Park", "walk", 40.7829, -73.9654),
-        ("Metropolitan Museum of Art", "museum", 40.7794, -73.9632),
-        ("Times Square", "sightseeing", 40.7580, -73.9855),
-        ("Empire State Building", "sightseeing", 40.7484, -73.9857),
-        ("Brooklyn Bridge", "walk", 40.7061, -73.9969),
-    ],
-    "nyc": [
-        ("Statue of Liberty", "sightseeing", 40.6892, -74.0445),
-        ("Central Park", "walk", 40.7829, -73.9654),
-        ("Metropolitan Museum of Art", "museum", 40.7794, -73.9632),
-        ("Times Square", "sightseeing", 40.7580, -73.9855),
-        ("Empire State Building", "sightseeing", 40.7484, -73.9857),
-        ("Brooklyn Bridge", "walk", 40.7061, -73.9969),
-    ],
-    "muenchen": [
-        ("Marienplatz", "sightseeing", 48.1374, 11.5755),
-        ("Neues Rathaus", "sightseeing", 48.1376, 11.5752),
-        ("Viktualienmarkt", "restaurant", 48.1351, 11.5764),
-        ("Englischer Garten", "walk", 48.1642, 11.6055),
-        ("Deutsches Museum", "museum", 48.1299, 11.5834),
-        ("Schloss Nymphenburg", "sightseeing", 48.1583, 11.5033),
-        ("Muenchner Residenz", "museum", 48.1419, 11.5787),
-        ("Olympiapark", "walk", 48.1733, 11.5516),
-        ("BMW Welt", "museum", 48.1768, 11.5562),
-        ("Pinakothek der Moderne", "museum", 48.1472, 11.5720),
-        ("Hofbräuhaus München", "restaurant", 48.1376, 11.5799),
-        ("Asamkirche", "sightseeing", 48.1351, 11.5698),
-        ("Frauenkirche", "sightseeing", 48.1386, 11.5736),
-        ("Odeonsplatz", "sightseeing", 48.1428, 11.5774),
-        ("Eisbachwelle", "sightseeing", 48.1437, 11.5877),
-        ("Maxvorstadt Cafes", "restaurant", 48.1490, 11.5680),
-        ("Kaufingerstrasse", "shopping", 48.1371, 11.5709),
-        ("Sendlinger Strasse", "shopping", 48.1346, 11.5693),
-        ("Isarspaziergang", "walk", 48.1255, 11.5804),
-        ("Glockenbachviertel", "walk", 48.1269, 11.5738),
-        ("Allianz Arena", "sightseeing", 48.2188, 11.6247),
-        ("Lenbachhaus", "museum", 48.1467, 11.5633),
-        ("Stachus", "shopping", 48.1390, 11.5655),
-        ("Gaertnerplatzviertel", "walk", 48.1319, 11.5769),
-        ("Augustiner-Keller", "restaurant", 48.1432, 11.5518),
-        ("Elisabethmarkt", "restaurant", 48.1577, 11.5747),
-        ("Theresienwiese", "walk", 48.1316, 11.5497),
-        ("Alter Botanischer Garten", "walk", 48.1418, 11.5622),
-    ],
-    "munich": [
-        ("Marienplatz", "sightseeing", 48.1374, 11.5755),
-        ("Neues Rathaus", "sightseeing", 48.1376, 11.5752),
-        ("Viktualienmarkt", "restaurant", 48.1351, 11.5764),
-        ("Englischer Garten", "walk", 48.1642, 11.6055),
-        ("Deutsches Museum", "museum", 48.1299, 11.5834),
-        ("Schloss Nymphenburg", "sightseeing", 48.1583, 11.5033),
-        ("Muenchner Residenz", "museum", 48.1419, 11.5787),
-        ("Olympiapark", "walk", 48.1733, 11.5516),
-        ("BMW Welt", "museum", 48.1768, 11.5562),
-        ("Pinakothek der Moderne", "museum", 48.1472, 11.5720),
-        ("Hofbräuhaus München", "restaurant", 48.1376, 11.5799),
-        ("Asamkirche", "sightseeing", 48.1351, 11.5698),
-        ("Frauenkirche", "sightseeing", 48.1386, 11.5736),
-        ("Odeonsplatz", "sightseeing", 48.1428, 11.5774),
-        ("Eisbachwelle", "sightseeing", 48.1437, 11.5877),
-        ("Maxvorstadt Cafes", "restaurant", 48.1490, 11.5680),
-        ("Kaufingerstrasse", "shopping", 48.1371, 11.5709),
-        ("Sendlinger Strasse", "shopping", 48.1346, 11.5693),
-        ("Isarspaziergang", "walk", 48.1255, 11.5804),
-        ("Glockenbachviertel", "walk", 48.1269, 11.5738),
-        ("Allianz Arena", "sightseeing", 48.2188, 11.6247),
-        ("Lenbachhaus", "museum", 48.1467, 11.5633),
-        ("Stachus", "shopping", 48.1390, 11.5655),
-        ("Gaertnerplatzviertel", "walk", 48.1319, 11.5769),
-        ("Augustiner-Keller", "restaurant", 48.1432, 11.5518),
-        ("Elisabethmarkt", "restaurant", 48.1577, 11.5747),
-        ("Theresienwiese", "walk", 48.1316, 11.5497),
-        ("Alter Botanischer Garten", "walk", 48.1418, 11.5622),
-    ],
-}
-
-GENERIC_ACTIVITIES = [
-    {
-        "id": "city-walk",
-        "name": "Stadtspaziergang",
-        "category": "walk",
-        "description": "Erkundung der Innenstadt zu Fuss.",
-        "location": {"name": "Stadtzentrum", "area": "Zentrum", "lat": None, "lng": None},
-        "estimated_cost_per_person": 0.0,
-        "duration_minutes": 90,
-        "indoor_outdoor": "outdoor",
-        "tags": ["spaziergaenge", "sehenswuerdigkeiten"],
-        "reasoning": "Guenstige Erkundungsoption.",
-        "source": "generic",
-    },
-    {
-        "id": "local-restaurant",
-        "name": "Lokales Restaurant",
-        "category": "restaurant",
-        "description": "Typisches Restaurant mit regionaler Kueche.",
-        "location": {"name": "Zentrum", "area": "Zentrum", "lat": None, "lng": None},
-        "estimated_cost_per_person": 20.0,
-        "duration_minutes": 75,
-        "indoor_outdoor": "indoor",
-        "tags": ["gutes essen", "rain_safe"],
-        "reasoning": "Lokale Kueche kennenlernen.",
-        "source": "generic",
-    },
-    {
-        "id": "city-museum",
-        "name": "Stadtmuseum",
-        "category": "museum",
-        "description": "Geschichte und Kultur der Stadt.",
-        "location": {"name": "Stadtmuseum", "area": "Zentrum", "lat": None, "lng": None},
-        "estimated_cost_per_person": 8.0,
-        "duration_minutes": 90,
-        "indoor_outdoor": "indoor",
-        "tags": ["museen", "geschichte", "rain_safe"],
-        "reasoning": "Kulturelles Pflichtprogramm.",
-        "source": "generic",
-    },
-    {
-        "id": "sightseeing-tour",
-        "name": "Stadtfuehrung",
-        "category": "sightseeing",
-        "description": "Gefuehrte Tour durch die Highlights der Stadt.",
-        "location": {"name": "Marktplatz", "area": "Zentrum", "lat": None, "lng": None},
-        "estimated_cost_per_person": 15.0,
-        "duration_minutes": 120,
-        "indoor_outdoor": "mixed",
-        "tags": ["sehenswuerdigkeiten", "fuehrung"],
-        "reasoning": "Effiziente Stadtentdeckung.",
-        "source": "generic",
-    },
-    {
-        "id": "park-relax",
-        "name": "Park und Natur",
-        "category": "walk",
-        "description": "Entspannung im Stadtpark.",
-        "location": {"name": "Stadtpark", "area": "Zentrum", "lat": None, "lng": None},
-        "estimated_cost_per_person": 0.0,
-        "duration_minutes": 60,
-        "indoor_outdoor": "outdoor",
-        "tags": ["spaziergaenge", "natur", "entspannung"],
-        "reasoning": "Guenstige Erholung.",
-        "source": "generic",
-    },
-]
-
-
 def _normalize_text(text: str) -> str:
     return (
         text.lower()
@@ -406,7 +169,7 @@ def _fetch_from_opentripmap(destination: str, interests: list) -> list:
         activities = [
             activity
             for activity in _rank_and_deduplicate(raw_activities)
-            if activity.get("quality_score", 0) >= 35
+            if activity.get("quality_score", 0) >= 10
         ]
 
         if activities:
@@ -422,7 +185,6 @@ def _fetch_from_opentripmap(destination: str, interests: list) -> list:
     except Exception as error:
         LAST_PLACES_STATUS = f"OpenTripMap Fehler: {type(error).__name__}"
         return []
-
 
 def _build_opentripmap_kinds(interests: list) -> list:
     kinds = [
@@ -451,7 +213,6 @@ def _build_opentripmap_kinds(interests: list) -> list:
                 kinds.append(kind)
 
     return kinds[:8]
-
 
 def _place_to_activity(place: dict, destination: str, interests: list) -> dict | None:
     name = _get_place_name(place).strip()
@@ -486,18 +247,15 @@ def _place_to_activity(place: dict, destination: str, interests: list) -> dict |
         "source": "opentripmap",
     }
 
-
 def _get_place_name(place: dict) -> str:
     if place.get("name"):
         return place["name"]
     return place.get("properties", {}).get("name", "")
 
-
 def _get_place_kinds(place: dict) -> str:
     if place.get("kinds"):
         return place["kinds"]
     return place.get("properties", {}).get("kinds", "")
-
 
 def _get_place_coordinates(place: dict) -> tuple:
     point = place.get("point", {})
@@ -510,7 +268,6 @@ def _get_place_coordinates(place: dict) -> tuple:
 
     return None, None
 
-
 def _is_bad_place_name(name: str) -> bool:
     normalized = _normalize_text(name)
     if len(normalized) < 4:
@@ -520,7 +277,6 @@ def _is_bad_place_name(name: str) -> bool:
             return True
     return any(word in normalized for word in BAD_NAME_WORDS)
 
-
 def _is_bad_place(place: dict, name: str, kinds_text: str) -> bool:
     normalized_kinds = _normalize_text(kinds_text)
     if _is_bad_place_name(name):
@@ -529,67 +285,80 @@ def _is_bad_place(place: dict, name: str, kinds_text: str) -> bool:
         return True
     return False
 
-
 def _category_allowed_by_interests(category: str, interests: list) -> bool:
-    interest_text = " ".join(_normalize_text(item) for item in interests)
     if category == "food":
-        return "gutes essen" in interest_text or "essen" in interest_text or "restaurant" in interest_text
+        return True  # Essen immer erlauben, unabhängig von Interessen
+    interest_text = " ".join(_normalize_text(item) for item in interests)
     if category == "shopping":
         return "shopping" in interest_text
     if category == "nature":
         return "natur" in interest_text or "spaziergaenge" in interest_text or "spaziergang" in interest_text
     return True
 
-
 def _quality_score(place: dict, name: str, kinds_str: str) -> int:
-    normalized_name = _normalize_text(name)
     normalized_kinds = _normalize_text(kinds_str)
     score = 5
 
-    if any(word in normalized_name for word in IMPORTANT_NAME_WORDS):
-        score += 60
-
-    if place.get("wikipedia"):
-        score += 10
-    if place.get("wikidata"):
-        score += 6
-
+    # Hauptsignal: OpenTripMap-Rate (0–7 → 0–42 Punkte)
     rate = place.get("rate", 0)
     if isinstance(rate, str) and rate.isdigit():
         rate = int(rate)
     if isinstance(rate, (int, float)):
-        score += min(int(rate), 7) * 4
+        score += min(int(rate), 7) * 6
 
+    # Kleiner Kategorie-Bonus
     if "museums" in normalized_kinds or "museum" in normalized_kinds:
-        score += 16
-    if "historic" in normalized_kinds:
-        score += 12
-    if "architecture" in normalized_kinds or "historic_architecture" in normalized_kinds:
         score += 10
+    if "historic" in normalized_kinds or "architecture" in normalized_kinds:
+        score += 8
     if "cultural" in normalized_kinds or "culture" in normalized_kinds:
-        score += 8
-    if (
-        "view_point" in normalized_kinds
-        or "view_points" in normalized_kinds
-        or "viewpoints" in normalized_kinds
-    ):
-        score += 10
-    if "interesting_places" in normalized_kinds:
         score += 6
+    if "view_point" in normalized_kinds or "view_points" in normalized_kinds:
+        score += 8
+    if "interesting_places" in normalized_kinds:
+        score += 4
     if "foods" in normalized_kinds or "restaurants" in normalized_kinds:
-        score += 8
+        score += 6
     if "shops" in normalized_kinds:
-        score += 8
+        score += 4
     if "natural" in normalized_kinds or "parks" in normalized_kinds:
-        score += 5
-
-    if any(word in normalized_name for word in BAD_NAME_WORDS):
-        score -= 80
-    if any(word in normalized_kinds for word in BAD_KIND_WORDS):
-        score -= 80
+        score += 4
 
     return max(0, min(score, 100))
 
+_DEDUP_FILL_WORDS = {"cathedral", "cathedrale", "museum", "the", "de", "la", "of", "musee", "musee"}
+_COORD_RADIUS_M = 150
+_NAME_SIMILARITY = 0.82
+
+def _ascii_normalize(text: str) -> str:
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").lower()
+
+def _strip_fill_words(name: str) -> str:
+    words = _ascii_normalize(name).split()
+    return " ".join(w for w in words if w not in _DEDUP_FILL_WORDS)
+
+def _coord_distance_m(lat1, lng1, lat2, lng2) -> float:
+    R = 6371000
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(a))
+
+def _is_same_place(a: dict, b: dict) -> bool:
+    loc_a = a.get("location", {})
+    loc_b = b.get("location", {})
+    lat1, lng1 = loc_a.get("lat"), loc_a.get("lng")
+    lat2, lng2 = loc_b.get("lat"), loc_b.get("lng")
+    if lat1 and lng1 and lat2 and lng2:
+        if _coord_distance_m(lat1, lng1, lat2, lng2) < _COORD_RADIUS_M:
+            return True
+    name_a = _strip_fill_words(a.get("name", ""))
+    name_b = _strip_fill_words(b.get("name", ""))
+    if name_a and name_b:
+        if difflib.SequenceMatcher(None, name_a, name_b).ratio() >= _NAME_SIMILARITY:
+            return True
+    return False
 
 def _rank_and_deduplicate(activities: list) -> list:
     best_by_name = {}
@@ -606,12 +375,14 @@ def _rank_and_deduplicate(activities: list) -> list:
     ranked.sort(key=lambda item: item.get("quality_score", 0), reverse=True)
     ranked = _balance_categories(ranked)
 
-    stable_highlights = ranked[:4]
-    variable_pool = ranked[4:24]
-    random.shuffle(variable_pool)
+    # Zweite Dedup-Runde: semantisch (Koordinaten-Nähe oder Namens-Ähnlichkeit)
+    deduped = []
+    for activity in ranked:
+        if not any(_is_same_place(activity, kept) for kept in deduped):
+            deduped.append(activity)
+    ranked = deduped
 
-    return (stable_highlights + variable_pool)[:30]
-
+    return ranked[:50]
 
 def _balance_categories(ranked: list) -> list:
     selected = []
@@ -630,55 +401,6 @@ def _balance_categories(ranked: list) -> list:
 
     return selected
 
-
-def _get_city_key(destination: str) -> str:
-    normalized = _normalize_text(destination).strip()
-    if normalized in CITY_HIGHLIGHTS:
-        return normalized
-
-    if "new york" in normalized:
-        return "new york"
-    if "mallorca" in normalized or "palma" in normalized:
-        return "mallorca"
-    if "koeln" in normalized or "cologne" in normalized:
-        return "koeln"
-    if "muenchen" in normalized or "munich" in normalized:
-        return "muenchen"
-
-    return normalized
-
-
-def _get_city_highlight_activities(destination: str) -> list:
-    city_key = _get_city_key(destination)
-    highlights = CITY_HIGHLIGHTS.get(city_key, [])
-
-    activities = []
-    for index, item in enumerate(highlights):
-        name, category, lat, lng = item
-        category = _normalize_category(category)
-        activities.append({
-            "id": f"highlight-{city_key}-{index}",
-            "name": name,
-            "category": category,
-            "description": f"Bekanntes Highlight in {destination}: {name}.",
-            "location": {
-                "name": name,
-                "area": destination,
-                "lat": lat,
-                "lng": lng,
-            },
-            "estimated_cost_per_person": _estimate_cost(category),
-            "duration_minutes": 90,
-            "indoor_outdoor": "indoor" if category in ["culture", "food"] else "mixed",
-            "tags": _tags_for_category(category),
-            "quality_score": 100,
-            "reasoning": f"Bekanntes Stadt-Highlight für {destination}.",
-            "source": "city_highlight",
-        })
-
-    return activities
-
-
 def _normalize_category(category: str) -> str:
     if category == "museum":
         return "culture"
@@ -687,20 +409,6 @@ def _normalize_category(category: str) -> str:
     if category == "walk":
         return "nature"
     return category
-
-
-def _tags_for_category(category: str) -> list:
-    category = _normalize_category(category)
-    if category == "culture":
-        return ["museen", "geschichte", "sehenswuerdigkeiten", "rain_safe"]
-    if category == "food":
-        return ["gutes essen", "rain_safe"]
-    if category == "nature":
-        return ["spaziergaenge", "natur", "sehenswuerdigkeiten"]
-    if category == "shopping":
-        return ["shopping", "sehenswuerdigkeiten"]
-    return ["sehenswuerdigkeiten", "geschichte"]
-
 
 def _map_kind(kinds_str: str) -> str:
     kinds = _normalize_text(kinds_str)
@@ -714,7 +422,6 @@ def _map_kind(kinds_str: str) -> str:
         return "culture"
     return "sightseeing"
 
-
 def _estimate_cost(category: str) -> float:
     category = _normalize_category(category)
     if category == "food":
@@ -723,7 +430,6 @@ def _estimate_cost(category: str) -> float:
         return 12.0
     return 0.0
 
-
 def _guess_indoor_outdoor(kinds_str: str) -> str:
     kinds = _normalize_text(kinds_str)
     if "museum" in kinds or "food" in kinds or "restaurant" in kinds:
@@ -731,7 +437,6 @@ def _guess_indoor_outdoor(kinds_str: str) -> str:
     if "natural" in kinds or "park" in kinds:
         return "outdoor"
     return "mixed"
-
 
 def _extract_tags(kinds_str: str, interests: list) -> list:
     tags = []
@@ -748,32 +453,6 @@ def _extract_tags(kinds_str: str, interests: list) -> list:
         tags += ["sehenswuerdigkeiten", "geschichte"]
     return list(set(tags))
 
-
 def get_places(destination: str, interests: list) -> list:
     global LAST_PLACES_STATUS
-
-    city_highlights = [
-        activity
-        for activity in _get_city_highlight_activities(destination)
-        if _category_allowed_by_interests(activity.get("category", ""), interests)
-    ]
-
-    api_results = _fetch_from_opentripmap(destination, interests)
-
-    if len(api_results) >= 12 and not city_highlights:
-        return api_results
-
-    fallback_results = city_highlights
-    if _get_city_key(destination) == "berlin" and len(api_results) < 8:
-        fallback_results = city_highlights + BERLIN_ACTIVITIES
-
-    combined_results = _rank_and_deduplicate(api_results + fallback_results)
-    if combined_results:
-        if fallback_results and api_results:
-            LAST_PLACES_STATUS = f"{LAST_PLACES_STATUS} Mit Stadt-Highlights aufgefuellt."
-        elif fallback_results:
-            LAST_PLACES_STATUS = f"{LAST_PLACES_STATUS} Fallback: Stadt-Highlights verwendet."
-        return combined_results
-
-    LAST_PLACES_STATUS = f"{LAST_PLACES_STATUS} Fallback: generische Aktivitäten verwendet."
-    return _rank_and_deduplicate(GENERIC_ACTIVITIES)
+    return _fetch_from_opentripmap(destination, interests)
