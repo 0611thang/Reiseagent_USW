@@ -312,8 +312,10 @@ Der **Flug-Check wird zur Agenten-Entscheidung** (LLM ruft das Tool, statt `if f
 - Monitoring-Verhalten bei Verspätung unverändert (Telegram-Proposal wie gehabt).
 
 ### Offene Fragen
-- **Scope Phase 5:** nur Flug-als-Entscheidung umsetzen, oder Finanz/Feedback/Tagesausflüge mitnehmen? (UMBAU markiert diese als „später".)
-- **Finanzmodell:** überhaupt bauen? Falls ja — welche konkreten Szenarien (Sparziel, Tagesbudget)? Der Professor nannte LLM-generierten Code als **Zukunfts**option, nicht als jetzt-Aufgabe.
+- ~~**Scope Phase 5:** nur Flug-als-Entscheidung umsetzen, oder Finanz/Feedback/Tagesausflüge mitnehmen?~~
+- ~~**Finanzmodell:** überhaupt bauen? Falls ja — welche konkreten Szenarien?~~
+
+**Update 2026-07-03:** Diese beiden Fragen sind nach Professor-Review + Team-Brainstorming beantwortet. Voller Scope wird umgesetzt (Flug-Entscheidung, dynamisches Finanzmodell inkl. simuliertem Bankkonto, Feedback-Agent) — zusätzlich wird auch der Orts-Vorfilter/Quality-Score (Phase 2) komplett durch LLM-Tool-Calling ersetzt. Details, Begründungen und die Aufteilung auf 4 Teammitglieder stehen in `BRAINSTORMING_PHASE5_2026-07-03.md` und `PHASE5_TEAM_PLAN_2026-07-03.md`. Diese Dateien haben Vorrang vor den obigen (jetzt überholten) Annahmen.
 
 ---
 ---

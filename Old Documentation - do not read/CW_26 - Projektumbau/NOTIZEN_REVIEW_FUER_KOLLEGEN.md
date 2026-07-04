@@ -52,5 +52,5 @@
 - Er nimmt sich für nächste Woche ~5 Min mehr Zeit, evtl. auch **Blick in den Code**.
 
 ---
-*Folgedokumente im Projekt:* [UMBAU_ERKLAERUNG_TEAM.md](../../UMBAU_ERKLAERUNG_TEAM.md) (verständlich) ·
-[UMBAU_VORSCHLAG.md](../../UMBAU_VORSCHLAG.md) (technisch).
+*Folgedokumente im Projekt:* [UMBAU_ERKLAERUNG_TEAM.md](../CW_27/UMBAU_ERKLAERUNG_TEAM.md) (verständlich) ·
+[UMBAU_VORSCHLAG.md](../CW_27/UMBAU_VORSCHLAG.md) (technisch).

@@ -13,15 +13,15 @@
 ## 1. Ist-Analyse (kompakt)
 
 ### 1.1 Zwei Einstiegspunkte, inkonsistent verdrahtet
-- **Streamlit** ([streamlit_app.py](reiseagent/streamlit_app.py)) ruft den Coordinator **direkt per Import**
-  über [ui_service.py](reiseagent/ui_service.py) auf (`coordinator.handle_plan_request`,
+- **Streamlit** ([streamlit_app.py](../../reiseagent/streamlit_app.py)) ruft den Coordinator **direkt per Import**
+  über [ui_service.py](../../reiseagent/ui_service.py) auf (`coordinator.handle_plan_request`,
   `coordinator.handle_chat_message`).
-- **FastAPI** ([main.py](reiseagent/main.py)) bietet dieselbe Logik als HTTP-API + 3 Hintergrund-Threads
+- **FastAPI** ([main.py](../../reiseagent/main.py)) bietet dieselbe Logik als HTTP-API + 3 Hintergrund-Threads
   (Monitoring, Navigations-Erinnerung, Telegram-Callbacks).
 - Streamlit nutzt die API **nicht** — es gibt zwei parallele Pfade.
 
 ### 1.2 Die Orchestrierung ist ein fest verdrahteter Workflow
-`coordinator.handle_plan_request()` ([coordinator.py:27](reiseagent/agents/coordinator.py)) ist eine
+`coordinator.handle_plan_request()` ([coordinator.py:27](../../reiseagent/agents/coordinator.py)) ist eine
 **lineare, hartcodierte Sequenz**:
 ```
 Profil-Interessen mergen → Wetter → Places → planning.create_plan
@@ -30,10 +30,10 @@ Profil-Interessen mergen → Wetter → Places → planning.create_plan
 Kein Agent entscheidet etwas. Es gibt keinen Router. Die Reihenfolge ist in Python festgeschrieben.
 
 ### 1.3 Der Chat ist ~1300 Zeilen Regex — nicht KI
-`coordinator.handle_chat_message()` ([coordinator.py:262](reiseagent/agents/coordinator.py)) klassifiziert
+`coordinator.handle_chat_message()` ([coordinator.py:262](../../reiseagent/agents/coordinator.py)) klassifiziert
 Nutzereingaben über **hunderte Keyword-/Regex-Regeln** (`_is_clear_time_change_request`,
 `_is_clear_replan_request`, `_category_from_text`, `_extract_requested_time` …) und ruft dann
-deterministische Handler. Das LLM (`_groq_response`, [coordinator.py:1575](reiseagent/agents/coordinator.py))
+deterministische Handler. Das LLM (`_groq_response`, [coordinator.py:1575](../../reiseagent/agents/coordinator.py))
 ist nur ein **Fallback**, der frei antwortet, aber **den Plan nicht ändern kann**.
 → Genau der Punkt des Professors: „kein Unterschied zu ChatGPT", weil hier das LLM nur plaudert und die
 Regeln die Arbeit machen.
@@ -42,33 +42,33 @@ Regeln die Arbeit machen.
 Vier Stellen rufen Groq (`llama-3.3-70b-versatile`) direkt und inline auf, jeweils mit Einzel-Prompt:
 | Datei | Zweck | Tool-Calling? |
 |---|---|---|
-| [daily_brief.py:62](reiseagent/agents/daily_brief.py) | Morgenbrief-Text | nein |
-| [navigation.py:28](reiseagent/agents/navigation.py) | Erinnerungstext | nein |
-| [suggestion_agent.py:121](reiseagent/agents/suggestion_agent.py) | Vorschlag als JSON | nein |
-| [coordinator.py:1587](reiseagent/agents/coordinator.py) | Chat-Q&A-Fallback | nein |
+| [daily_brief.py:62](../../reiseagent/agents/daily_brief.py) | Morgenbrief-Text | nein |
+| [navigation.py:28](../../reiseagent/agents/navigation.py) | Erinnerungstext | nein |
+| [suggestion_agent.py:121](../../reiseagent/agents/suggestion_agent.py) | Vorschlag als JSON | nein |
+| [coordinator.py:1587](../../reiseagent/agents/coordinator.py) | Chat-Q&A-Fallback | nein |
 
 Kein zentrales `llm.py`, kein Tool-Calling, keine Prompt-Templates an einer Stelle.
 
 ### 1.5 Wo Qualitätsfehler entstehen (z.B. „Notre-Dame doppelt")
 - **Dedup ist nur exakter Namensabgleich pro Aufruf:** `_rank_and_deduplicate`
-  ([places.py:594](reiseagent/providers/places.py)) dedupliziert per *exakt normalisiertem Namen*.
+  ([places.py:594](../../reiseagent/providers/places.py)) dedupliziert per *exakt normalisiertem Namen*.
   „Notre-Dame Cathedral" (CITY_HIGHLIGHTS) und „Cathédrale Notre-Dame" (OpenTripMap) gelten als
   **verschieden** → beide landen im Pool → Dublette möglich.
 - **Keine globale Plan-Validierung:** `planning.create_plan` verhindert via `used_ids` nur **gleiche IDs**.
   Zwei verschiedene IDs für denselben realen Ort werden nicht erkannt.
-- **Chat fügt ungeprüft hinzu:** `_custom_activity` ([coordinator.py:966](reiseagent/agents/coordinator.py))
+- **Chat fügt ungeprüft hinzu:** `_custom_activity` ([coordinator.py:966](../../reiseagent/agents/coordinator.py))
   erzeugt neue UUIDs; die einzige Schranke ist ein exakter Namensvergleich (`_plan_contains_activity`).
 - **Fazit:** Es fehlt eine **semantische, quellenübergreifende Dedup** + eine **finale Qualitätsprüfung**
   des fertigen Plans. Das ist die strukturelle Ursache des vom Professor gesehenen Fehlers.
 
 ### 1.6 Kontext-Integration (Telegram/Mail/Kalender) — heute oberflächlich
-- **Telegram** ([telegram.py:99](reiseagent/providers/telegram.py)): `get_recent_messages` holt die letzten
+- **Telegram** ([telegram.py:99](../../reiseagent/providers/telegram.py)): `get_recent_messages` holt die letzten
   100 Updates, filtert nach Zeit; `find_trip_relevant_messages` filtert nach **hartcodierten Keywords**.
   **Keine Speicherung. Keine Vektordatenbank. Kein Retrieval.**
-- **Gmail** ([gmail.py:54](reiseagent/providers/gmail.py)): gleiches Muster — Keyword-Filter, keine Speicherung.
-- **Profil-Lernen** ([profile_learner.py](reiseagent/agents/profile_learner.py)): extrahiert Interessen per
+- **Gmail** ([gmail.py:54](../../reiseagent/providers/gmail.py)): gleiches Muster — Keyword-Filter, keine Speicherung.
+- **Profil-Lernen** ([profile_learner.py](../../reiseagent/agents/profile_learner.py)): extrahiert Interessen per
   **Regex/Keyword** in `profile.db` (`interests`-Tabelle). Roh-Nachrichten werden **nicht** abgelegt.
-- **Kalender** ([calendar.py:80](reiseagent/providers/calendar.py)): `find_free_days` betrachtet einen Tag nur
+- **Kalender** ([calendar.py:80](../../reiseagent/providers/calendar.py)): `find_free_days` betrachtet einen Tag nur
   dann als belegt, wenn er einen **REISEAGENT-Marker** trägt (`blocks_reiseagent_day`). **Echte fremde
   Kalendertermine blockieren keinen Tag** → die Freizeit-Erkennung ist praktisch wirkungslos für reale Termine.
 - **Antwort auf die Frage des Professors** („Vektor-DB? ein Dokument pro Nachricht? wie gematcht?"):
@@ -78,29 +78,29 @@ Kein zentrales `llm.py`, kein Tool-Calling, keine Prompt-Templates an einer Stel
 Die Bausteine sind da, aber nicht zu einem proaktiven Erlebnis verdrahtet:
 - `free_time_detector` → `suggestion_agent` → `profile.db` → API `/api/suggestions/*` — **nur manuell per
   Endpoint** auslösbar, **kein Scheduler**, **nicht im Chat sichtbar**.
-- `monitoring._monitoring_loop` ([main.py:50](reiseagent/main.py)) läuft im Hintergrund — aber **nur für
+- `monitoring._monitoring_loop` ([main.py:50](../../reiseagent/main.py)) läuft im Hintergrund — aber **nur für
   Wetter + Flüge**, nicht für proaktive Reisevorschläge.
 
 ### 1.8 Flug-Logik ist rein regelbasiert
 Flug-API wird nur getriggert, wenn `request["flight_number"]` gesetzt ist
-([coordinator.py:75](reiseagent/agents/coordinator.py), [monitoring.py:226](reiseagent/agents/monitoring.py)).
+([coordinator.py:75](../../reiseagent/agents/coordinator.py), [monitoring.py:226](../../reiseagent/agents/monitoring.py)).
 Der Agent **entscheidet nicht selbst**, dass ein API-Call sinnvoll wäre.
 
 ### 1.9 Was heute deterministisch ist
-Zeiten/Taktung ([planning.py](reiseagent/agents/planning.py)), Fahrtzeiten
-([providers/navigation.py](reiseagent/providers/navigation.py)), Budget ([budget.py](reiseagent/agents/budget.py)),
+Zeiten/Taktung ([planning.py](../../reiseagent/agents/planning.py)), Fahrtzeiten
+([providers/navigation.py](../../reiseagent/providers/navigation.py)), Budget ([budget.py](../../reiseagent/agents/budget.py)),
 Kalender-Freitage-Mathematik. Diese rechnen heute korrekt und deterministisch.
 > **Team-Entscheidung (2026-06-27):** Für **Zeiten + Fahrtzeiten** wird bewusst ein **LLM-Experiment** gemacht
 > (siehe Abschnitt 3 „Zeit-/Routen-Agent" und Abschnitt 5). **Budget** und **Kalender-/Dedup-Mathematik**
 > bleiben deterministisch.
 
 ### 1.10 Persistenz & bereits vorhandene Bausteine (Status quo)
-- [store.py](reiseagent/store.py) ist **SQLite** (`trips`-Tabelle, ein JSON-Blob pro Trip) — bereits persistent.
-- [profile_store.py](reiseagent/profile_store.py) ist SQLite (`interests`, `past_events`, `free_days`,
+- [store.py](../../reiseagent/store.py) ist **SQLite** (`trips`-Tabelle, ein JSON-Blob pro Trip) — bereits persistent.
+- [profile_store.py](../../reiseagent/profile_store.py) ist SQLite (`interests`, `past_events`, `free_days`,
   `suggestions`).
-- [providers/flights.py](reiseagent/providers/flights.py) und [monitoring.py](reiseagent/agents/monitoring.py)
+- [providers/flights.py](../../reiseagent/providers/flights.py) und [monitoring.py](../../reiseagent/agents/monitoring.py)
   **existieren bereits** (Wetter-/Flug-Überwachung im Hintergrund-Thread).
-- [models.py](reiseagent/models.py) enthält `TypedDict`s — werden aber **nicht zur Validierung** genutzt, nur
+- [models.py](../../reiseagent/models.py) enthält `TypedDict`s — werden aber **nicht zur Validierung** genutzt, nur
   als Typ-Hinweise. (Relevant für die Qualitäts-Gates in Abschnitt 3.)
 
 ---
@@ -251,7 +251,7 @@ herauszuarbeiten war ein Wunsch des Professors.
 ## 6. Interaktions-/UX-Umbau
 
 ### 6.1 Zwei kombinierte Modi (Formular bleibt — ausdrücklicher Wunsch des Professors)
-- **Formular „eigene Reise planen"** ([streamlit_app.py:1538](reiseagent/streamlit_app.py)) **bleibt** für
+- **Formular „eigene Reise planen"** ([streamlit_app.py:1538](../../reiseagent/streamlit_app.py)) **bleibt** für
   „schnell mal abchecken".
 - **Chat-/Agenten-Modus** wird zum primären, agentischen Weg: Freitext → Orchestrator (LangGraph) →
   kann **planen, ändern, vorschlagen, Fragen beantworten**. Ersetzt die Regex-Maschine aus 1.3.
@@ -270,7 +270,7 @@ herauszuarbeiten war ein Wunsch des Professors.
 ### 6.3 Flug als Agenten-Entscheidung
 Statt „wenn Feld Flugnummer gesetzt": Das LLM **entscheidet**, ob `check_flight`/`search_flight` nötig ist
 (z.B. Nutzer nennt nur Starthafen → Agent sucht Flug, zieht Datum/Ankunft). Tool vorhanden
-([providers/flights.py](reiseagent/providers/flights.py)), nur der **Auslöser** wandert vom `if` ins LLM.
+([providers/flights.py](../../reiseagent/providers/flights.py)), nur der **Auslöser** wandert vom `if` ins LLM.
 
 ---
 
