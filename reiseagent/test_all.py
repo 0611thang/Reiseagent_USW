@@ -2,6 +2,9 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
+from dotenv import load_dotenv
+load_dotenv()  # ohne .env kein GROQ_API_KEY -> LLM-Tests wuerden nur den Fallback pruefen
+
 from datetime import date, timedelta
 
 # ── Ergebnis-Tracking ────────────────────────────────────────────────────────
@@ -596,6 +599,60 @@ try:
             fail(f"TEST 20 - FastAPI: {method} {path}", "Route nicht registriert")
 except Exception as e:
     fail("TEST 20 - FastAPI: app Import", str(e))
+
+# ── TEST 21 – Kostenschätzungs-Agent ──────────────────────────────────────────
+
+print("\n── TEST 21 – Kostenschätzungs-Agent ────────────────────────────────────")
+COST_TEST_DAY = {
+    "day_number": 1,
+    "title": "Test",
+    "date": "2026-07-10",
+    "time_slots": [
+        {
+            "activity": {
+                "id": "cost-test-museum",
+                "name": "Testmuseum",
+                "category": "culture",
+                "estimated_cost_per_person": 12.0,
+                "estimated_cost_total": 24.0,
+            }
+        },
+        {
+            "activity": {
+                "id": "cost-test-restaurant",
+                "name": "Testrestaurant",
+                "category": "food",
+                "estimated_cost_per_person": 20.0,
+                "estimated_cost_total": 40.0,
+            }
+        },
+    ],
+}
+
+try:
+    from agents.cost_estimation import estimate_costs_for_plan
+    cost_days = [COST_TEST_DAY]
+    estimate_costs_for_plan(cost_days, TEST_REQUEST)
+    activity = cost_days[0]["time_slots"][0]["activity"]
+    cost_value = activity.get("estimated_cost_per_person")
+    if isinstance(cost_value, (int, float)) and cost_value >= 0:
+        ok(f"TEST 21 - Kostenschätzung: estimated_cost_per_person bleibt numerisch ({cost_value})")
+    else:
+        fail("TEST 21 - Kostenschätzung: estimated_cost_per_person bleibt numerisch", f"Wert: {cost_value}")
+except Exception as e:
+    fail("TEST 21 - Kostenschätzung: estimate_costs_for_plan läuft ohne Absturz", str(e))
+
+try:
+    from agents.cost_estimation import get_agent_insight
+    insight = get_agent_insight()
+    required = {"agent_name", "display_label", "status", "summary"}
+    missing = [r for r in required if r not in insight]
+    if not missing:
+        ok("TEST 21 - Kostenschätzung: get_agent_insight liefert erwartete Felder")
+    else:
+        fail("TEST 21 - Kostenschätzung: get_agent_insight liefert erwartete Felder", f"Fehlend: {missing}")
+except Exception as e:
+    fail("TEST 21 - Kostenschätzung: get_agent_insight liefert erwartete Felder", str(e))
 
 # ── Zusammenfassung ───────────────────────────────────────────────────────────
 

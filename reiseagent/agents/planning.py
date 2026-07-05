@@ -118,7 +118,7 @@ def _parse_curate_response(raw: str) -> dict | None:
         return None
 
 
-def _curate_plan(request: dict, all_activities: list, weather: list, duration_days: int) -> dict | None:
+def _curate_plan(request: dict, all_activities: list, weather: list, duration_days: int, budget_hint: str = None) -> dict | None:
     """LLM kuratiert den gesamten Plan. Gibt {day_str: [id,...]} oder None (→ Fallback) zurück."""
     candidates = all_activities[:50]
     candidate_text = _build_candidate_text(candidates)
@@ -133,6 +133,8 @@ def _curate_plan(request: dict, all_activities: list, weather: list, duration_da
     else:
         context_block = ""
 
+    budget_hint_block = f"Wichtiger Hinweis: {budget_hint}\n\n" if budget_hint else ""
+
     prompt = prompts.fill(
         prompts.CURATE_PLAN,
         destination=destination,
@@ -141,6 +143,7 @@ def _curate_plan(request: dict, all_activities: list, weather: list, duration_da
         weather_summary=weather_summary,
         candidates=candidate_text,
         context_block=context_block,
+        budget_hint_block=budget_hint_block,
     )
 
     raw = llm.call("planning_agent", prompt, prompt_id="CURATE_PLAN", max_tokens=1000)
@@ -209,7 +212,7 @@ def _deterministic_slots(activities_for_day: list, day_start_time: str) -> list:
     return time_slots
 
 
-def create_plan(request: dict, all_activities: list, weather: list) -> list:
+def create_plan(request: dict, all_activities: list, weather: list, budget_hint: str = None) -> list:
     duration_days = request.get("duration_days", 3)
     day_start_time = request.get("day_start_time", "09:00")
 
@@ -217,7 +220,7 @@ def create_plan(request: dict, all_activities: list, weather: list) -> list:
     start_date = date.fromisoformat(start_date_str) if start_date_str else date.today()
 
     # LLM kuratiert den gesamten Plan auf einmal
-    plan_by_day = _curate_plan(request, all_activities, weather, duration_days)
+    plan_by_day = _curate_plan(request, all_activities, weather, duration_days, budget_hint=budget_hint)
 
     used_ids: set = set()
     days = []

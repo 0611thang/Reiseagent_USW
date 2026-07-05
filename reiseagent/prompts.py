@@ -47,6 +47,7 @@ CURATE_PLAN = (
     "Kandidaten (id | name | kategorie | innen/außen | kosten/Person):\n"
     "{candidates}\n\n"
     "{context_block}"
+    "{budget_hint_block}"
     "Regeln:\n"
     "- Jede Aktivität darf im gesamten Plan nur einmal vorkommen.\n"
     "- Pro Tag: mindestens 4 Aktivitäten, maximal 2 der gleichen Kategorie (sightseeing: max. 3).\n"
@@ -82,6 +83,21 @@ INTERPRET_CALENDAR = (
     "{events_text}\n\n"
     "Antworte NUR als JSON-Liste ohne Markdown-Backticks:\n"
     '[{{"date": "YYYY-MM-DD", "status": "free", "reason": "Kurze Begründung"}}, ...]'
+)
+
+ESTIMATE_COSTS = (
+    "Du bist ein Reisekosten-Experte. Schätze für die folgenden Aktivitäten in {destination} "
+    "einen realistischen Preis pro Person in Euro, basierend auf deinem Wissen über "
+    "Preisniveaus vor Ort. Du hast keinen Internetzugang — eine plausible Schätzung reicht.\n\n"
+    "Aktivitäten (id | name | kategorie):\n"
+    "{activities}\n\n"
+    "Regeln:\n"
+    "- food: realistischer Preis für eine Mahlzeit an diesem Ort.\n"
+    "- culture: realistischer Eintrittspreis.\n"
+    "- sightseeing/nature/shopping: meist 0, außer es ist erkennbar eine kostenpflichtige Attraktion.\n"
+    "- Genau ein Zahlenwert pro Aktivität, keine Preisspannen und kein Text.\n\n"
+    "Antworte NUR als JSON ohne Markdown-Backticks:\n"
+    '{{"kosten": [{{"id": "...", "preis_pro_person": 12.5}}, ...]}}'
 )
 
 ORCHESTRATOR = (

@@ -12,7 +12,7 @@ from providers.flights import get_flight_status_for_trip
 import providers.places as places_provider
 from providers.calendar import sync_changed_days_to_calendar, sync_full_plan_to_calendar
 from providers.telegram import send_plan_update
-from agents import planning, budget, checklist, recommendation, replanning
+from agents import planning, budget, checklist, recommendation, replanning, cost_estimation
 import profile_store
 
 # Mapping von Profil-Kategorien (profile_learner) zu Formular-Labels (recommendation.py)
@@ -102,11 +102,43 @@ def handle_plan_request(request: dict, use_mock_weather: bool = False) -> dict:
 
     insights.append(planning.get_agent_insight(len(days)))
 
-    total_activities = sum(len(d["time_slots"]) for d in days)
-    insights.append(recommendation.get_agent_insight(total_activities))
+    cost_estimation.estimate_costs_for_plan(days, request)
+    insights.append(cost_estimation.get_agent_insight())
 
     budget_summary = budget.calculate_budget(days, request)
-    insights.append(budget.get_agent_insight())
+    attempts_used = 1
+    while budget_summary["status"] == "over_budget" and attempts_used < cost_estimation.MAX_BUDGET_ATTEMPTS:
+        over_by = budget_summary["planned_total"] - budget_summary["budget_total"]
+        currency = budget_summary.get("currency", "EUR")
+        budget_hint = (
+            f"Der bisherige Plan kostet {budget_summary['planned_total']:.0f} {currency}, "
+            f"das sind {over_by:.0f} {currency} ueber dem Budget von "
+            f"{budget_summary['budget_total']:.0f} {currency}. "
+            "Waehle merklich guenstigere Aktivitaeten oder weniger kostenintensive Alternativen."
+        )
+        days = planning.create_plan(request, all_activities, weather, budget_hint=budget_hint)
+        if flight_updates and flight_updates.get("found"):
+            _adjust_first_day_for_flight(days, flight_updates, request)
+        cost_estimation.estimate_costs_for_plan(days, request)
+        budget_summary = budget.calculate_budget(days, request)
+        attempts_used += 1
+
+    if budget_summary["status"] == "over_budget":
+        insights.append({
+            "agent_name": "budget_agent",
+            "display_label": "Budget Agent",
+            "status": "warning",
+            "summary": (
+                f"Budget nach {attempts_used} Versuch(en) weiterhin überschritten "
+                f"({budget_summary['planned_total']:.0f} von {budget_summary['budget_total']:.0f} "
+                f"{budget_summary.get('currency', 'EUR')})."
+            ),
+        })
+    else:
+        insights.append(budget.get_agent_insight())
+
+    total_activities = sum(len(d["time_slots"]) for d in days)
+    insights.append(recommendation.get_agent_insight(total_activities))
 
     plan_id = str(uuid.uuid4())
     now = datetime.now().isoformat()
