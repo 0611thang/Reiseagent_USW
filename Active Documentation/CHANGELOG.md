@@ -5,6 +5,61 @@ Sortierung: **neueste Einträge oben**.
 
 ---
 
+## [2026-07-05] Feature: Phase 5 Modul 3 — Kostenschätzungsagent + Budget-Ausgleichsschleife
+
+**Status:** Merged
+**Datum & Uhrzeit:** 2026-07-05
+**Autor:** Valeriu (mit Claude)
+
+### Zweck
+Nach Professor-Feedback und Team-Brainstorming (siehe `PHASE5_TECHNISCHE_ERKLAERUNG_2026-07-03.md`, Abschnitt 3) sollten die bisherigen Pauschalpreise pro Kategorie (20€ food, 12€ culture, 0€ sonst, unabhängig vom konkreten Ort) durch eine individuelle, LLM-basierte Kostenschätzung pro Aktivität ersetzt werden. Zusätzlich sollte das System bei Budgetüberschreitung selbstständig gegensteuern, statt den Nutzer nur zu warnen. Bewusst **keine Websuche** (weder Tavily noch Groq Compound) — das Sprachmodell schätzt aus seinem Trainingswissen, das reicht für ein Uni-Projekt/MVP aus.
+
+### Was wurde geändert
+
+**`reiseagent/agents/cost_estimation.py`** (neu):
+- `estimate_costs_for_day(day, request)`: schickt pro Tag einen gebündelten Prompt (alle Aktivitäten des Tages auf einmal, analog zum bestehenden `SCHEDULE_DAY`-Muster in `time_route_agent.py`, statt einem Call pro einzelner Aktivität) und aktualisiert `estimated_cost_per_person`/`estimated_cost_total` in-place.
+- `estimate_costs_for_plan(days, request)`: läuft über alle Tage.
+- Schlägt der LLM-Call fehl (kein `GROQ_API_KEY`, Parse-Fehler, negativer Wert) bleiben die bisherigen Pauschalpreise unverändert stehen — Fallback statt Absturz.
+- `MAX_BUDGET_ATTEMPTS = 3` — Obergrenze für die neue Ausgleichsschleife.
+- `get_agent_insight()` nach bestehendem Muster.
+
+**`reiseagent/prompts.py`**:
+- Neuer Prompt `ESTIMATE_COSTS` (Deutsch, wie alle bestehenden Prompts trotz gegenteiliger Notiz in `IMPLEMENTIERUNGSPLAN_PHASE_0-5.md` — Konsistenz mit tatsächlichem Codebase-Stil hatte Vorrang).
+- `CURATE_PLAN` um optionalen Platzhalter `{budget_hint_block}` erweitert.
+
+**`reiseagent/agents/planning.py`**:
+- `create_plan(request, all_activities, weather, budget_hint=None)` und `_curate_plan(..., budget_hint=None)`: neuer optionaler Parameter, alte Aufrufer ohne `budget_hint` funktionieren unverändert weiter (Signatur nicht gebrochen).
+
+**`reiseagent/agents/coordinator.py`** (`handle_plan_request`):
+- Nach der Planerstellung läuft `cost_estimation.estimate_costs_for_plan(days, request)`.
+- Neue Budget-Ausgleichsschleife: Ist der Plan `over_budget`, wird `planning.create_plan(...)` mit einem Budget-Hinweis erneut aufgerufen (bis zu `MAX_BUDGET_ATTEMPTS` mal), danach erneut Kostenschätzung + Budgetberechnung.
+- Die Flug-Zeitanpassung (`_adjust_first_day_for_flight`) wird bei jeder Wiederholung erneut angewendet, damit sie durch die Neuplanung nicht verloren geht.
+- Bleibt der Plan nach allen Versuchen über Budget, gibt es eine `warning`-Insight statt eines stillen Fehlers.
+- `total_activities`/Recommendation-Insight werden jetzt nach der Schleife berechnet, damit sie den finalen (nicht den ersten) Plan widerspiegeln.
+
+**`reiseagent/test_all.py`**:
+- Neuer `TEST 21 – Kostenschätzungs-Agent` (prüft `estimate_costs_for_plan` und `get_agent_insight`).
+- **Wichtiger Nebenfund/Fix:** Die Datei lud `.env` bisher nirgends (`load_dotenv()` fehlte komplett), wodurch **alle** LLM-abhängigen Tests im Suite bisher nur den Fallback-Pfad geprüft haben, nicht die echte KI-Logik. Jetzt am Dateianfang ergänzt.
+
+### Betroffene Dateien
+- `reiseagent/agents/cost_estimation.py` (neu)
+- `reiseagent/prompts.py`
+- `reiseagent/agents/planning.py`
+- `reiseagent/agents/coordinator.py`
+- `reiseagent/test_all.py`
+
+### Tests
+- `python3 test_all.py`: 61 bestanden, 1 fehlgeschlagen (Fehlschlag in `agents/recommendation.py`, unabhängig von diesem Feature — nur durch den `.env`-Fix mit echten Ortsdaten sichtbar geworden, siehe separater Task).
+- Manuell mit synthetischen, teuren Aktivitäten und knappem Budget verifiziert: echte Groq-Calls liefern plausible, ortsbezogene Preise (z.B. Eiffelturm korrekt als kostenpflichtige Attraktion erkannt statt pauschal 0€); die Ausgleichsschleife verschiebt die Auswahl über mehrere Versuche sichtbar Richtung günstigerer Kombinationen und terminiert nach 3 Versuchen zuverlässig mit klarer Warnung statt Endlosschleife.
+
+### Hinweis
+- Keine Websuche integriert (Tavily- und Groq-Compound-Ideen wurden im Brainstorming verworfen) — Schätzung basiert rein auf LLM-Trainingswissen, daher keine live-aktuellen Preise.
+- Bekannter Nebeneffekt: `pick_activities_for_day` in `agents/recommendation.py` kann mit echten (nicht-leeren) Ortsdaten 5 statt max. 4 Aktivitäten pro Tag liefern — separat zu fixen, nicht Teil dieses Features.
+
+**Breaking Change:** Nein — neue Parameter sind optional mit Default `None`, bestehende Aufrufer unverändert.
+
+---
+
 ## [2026-06-28] Fix: Angenommene Telegram-Vorschläge in Google Calendar eintragen
 
 **Status:** Merged  
