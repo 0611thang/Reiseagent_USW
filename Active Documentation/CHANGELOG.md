@@ -4,6 +4,76 @@ Alle Änderungen am Projekt werden hier dokumentiert.
 Sortierung: **neueste Einträge oben**.
 
 ---
+## [2026-07-07] Feature: Modul D – Simuliertes Bankkonto und Feedback-Agent
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-07-07  
+**Autor:** Ibrahim Danisman  
+**Commits:**
+- `4c9ca89` / `94592b1` – Pending-Prompt-Routing für Telegram-Freitext
+- `7413027` – Simuliertes Bankkonto mit Telegram-Check-in
+- `8f79602` – Feedback-Agent nach Reiseende
+
+### Zweck
+Modul D erweitert den Reiseagenten um zwei proaktive Funktionen: ein simuliertes Bankkonto für monatliche Reisebudget-Planung und einen Feedback-Agenten, der nach Reiseende strukturiertes Nutzerfeedback sammelt. Beide Funktionen nutzen eine gemeinsame Pending-Prompt-Infrastruktur, damit Telegram-Freitext-Antworten eindeutig einer offenen Systemfrage zugeordnet werden können.
+
+### Was wurde geändert
+- Neue Tabelle `pending_prompts` eingeführt, um offene Telegram-Fragen zu speichern.
+- Telegram-Freitextnachrichten können jetzt live über `get_message_updates(...)` verarbeitet werden.
+- Der bestehende Telegram-Loop verarbeitet Callback-Buttons und normale Textnachrichten mit gemeinsamem Offset.
+- Offene Fragen werden anhand ihres Typs geroutet, z. B. `bank_checkin` oder `feedback`.
+- Normale Telegram-Nachrichten ohne offene Frage bleiben unverändert und werden nicht falsch interpretiert.
+
+### Simuliertes Bankkonto
+- Neue Tabellen `bank_account` und `bank_transactions` ergänzt.
+- Monatlicher Bankkonto-Check-in fragt am 1. des Monats per Telegram nach Einnahmen und Fixkosten.
+- Antworten wie `Einnahmen 3000, Fixkosten 2000` werden durch den neuen `bank_agent` interpretiert.
+- Aus Einnahmen und Fixkosten werden freier Betrag und vorgeschlagene Reise-Rücklage berechnet.
+- Reisekosten werden nach Reiseerstellung oder Vorschlagsannahme vom simulierten Konto abgezogen.
+- Doppelte Abbuchungen pro `trip_id` werden verhindert.
+- Negative Kontostände sind für die Testphase erlaubt.
+
+### Feedback-Agent
+- Neue Tabelle `trip_feedback` ergänzt.
+- Nach Reiseende kann der Nutzer automatisch per Telegram nach Feedback gefragt werden.
+- Feedback wird bewusst getrennt von `interests` gespeichert, da es sich um aktive Bewertungen statt passive Keyword-Treffer handelt.
+- Der neue `feedback_agent` erkennt Kategorien und Bewertungen aus Freitext, z. B. `Museen 5/5, Essen 3/5`.
+- Unterstützte Kategorien sind `culture`, `food`, `nature`, `sightseeing` und `shopping`.
+- Pro erkannter Kategorie wird eine eigene Feedback-Zeile gespeichert.
+- Unklare Antworten lassen die offene Feedback-Frage bestehen, statt falsche Daten zu speichern.
+
+### Technische Umsetzung
+- `profile_store.py` wurde um neue Tabellen und Hilfsfunktionen erweitert.
+- `providers/telegram.py` wurde additiv um Freitext-Update-Verarbeitung ergänzt.
+- `main.py` routet offene Telegram-Antworten an Bankkonto- oder Feedback-Agent.
+- `scheduler.py` enthält neue Trigger für Monats-Check-in und Reiseende-Feedback.
+- `store.py` speichert pro Reise das Flag `feedback_requested`.
+- `agents/bank_agent.py` und `agents/feedback_agent.py` wurden neu ergänzt.
+- `prompts.py` enthält neue Prompts für Bankkonto- und Feedback-Interpretation.
+
+### Tests
+- Pending-Prompt-Exklusivität erfolgreich geprüft.
+- Telegram-Freitext-Routing erfolgreich geprüft.
+- Bankkonto-Check-in mit Beispielantwort erfolgreich geprüft.
+- Berechnung von freiem Betrag und Reise-Rücklage erfolgreich geprüft.
+- Doppelte Bankkonto-Abbuchung pro Reise verhindert.
+- Feedback-Erkennung mit `Museen 5/5, Essen 3/5` erfolgreich geprüft.
+- Speicherung mehrerer Feedback-Kategorien erfolgreich geprüft.
+- Bankkonto- und Feedback-Antworten werden getrennt verarbeitet.
+- Normale Telegram-Nachrichten ohne offene Frage bleiben unverändert.
+- `py_compile` erfolgreich.
+- `git diff --check` erfolgreich.
+
+### Bekannte Einschränkungen
+- Es wird im MVP immer nur eine offene Telegram-Frage gleichzeitig erlaubt.
+- Wenn mehrere Reisen am selben Tag enden, wird pro Scheduler-Lauf nur eine Feedback-Frage gestellt.
+- Wenn Monats-Check-in und Reiseende am selben Tag fällig sind, hat der Bankkonto-Check-in Priorität.
+- `test_all.py` ist auf Windows wegen eines vorbestehenden Konsolen-Encoding-Problems nicht vollständig nutzbar.
+- Die Rückkopplung von Feedback in `agents/recommendation.py` ist bewusst nicht Teil dieses MVP.
+
+**Breaking Change:** Nein.
+
+---
 
 ## [2026-07-05] Feature: Phase 5 Modul 3 — Kostenschätzungsagent + Budget-Ausgleichsschleife
 
