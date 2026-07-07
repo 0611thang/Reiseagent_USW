@@ -254,6 +254,8 @@ def init_session():
         st.session_state.trip_form_previous_travel_type = "solo"
     if "trip_form_people" not in st.session_state:
         st.session_state.trip_form_people = 1
+    if "confirm_reset_bank" not in st.session_state:
+        st.session_state.confirm_reset_bank = False
 
 
 def add_status(message: str):
@@ -1470,6 +1472,105 @@ def render_trip_overview(compact: bool = False):
                         st.rerun()
 
 
+def render_bank_account_section():
+    """Einfache Verwaltung für das simulierte Bankkonto (Modul D). Rein lesend/
+    schreibend über profile_store — keine Telegram-, Kalender- oder Trip-Aktionen."""
+    with st.expander("Simuliertes Bankkonto"):
+        account = profile_store.get_current_bank_account()
+
+        st.markdown("#### Aktueller Stand")
+        if not account:
+            st.info("Noch keine Bankdaten gespeichert.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Monat", account["month"])
+            c1.metric("Einnahmen", f"{account['income']:.0f} €")
+            c2.metric("Fixkosten", f"{account['fixed_costs']:.0f} €")
+            c2.metric("Freier Betrag", f"{account['free_amount']:.0f} €")
+            c3.metric("Reise-Rücklage", f"{account['travel_reserve']:.0f} €")
+            c3.metric("Aktueller Kontostand", f"{account['current_balance']:.0f} €")
+
+        st.markdown("#### Bankkonto bearbeiten")
+        with st.form("bank_checkin_form"):
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                month_input = st.text_input(
+                    "Monat (YYYY-MM)",
+                    value=account["month"] if account else date.today().strftime("%Y-%m"),
+                )
+                income_input = st.number_input(
+                    "Einnahmen (EUR)",
+                    min_value=0.0,
+                    value=float(account["income"]) if account else 0.0,
+                    step=50.0,
+                )
+            with bc2:
+                fixed_costs_input = st.number_input(
+                    "Fixkosten (EUR)",
+                    min_value=0.0,
+                    value=float(account["fixed_costs"]) if account else 0.0,
+                    step=50.0,
+                )
+                travel_reserve_input = st.number_input(
+                    "Reise-Rücklage (EUR)",
+                    min_value=0.0,
+                    value=0.0,
+                    step=10.0,
+                    help="Leer/0 lassen, um automatisch 20 % vom freien Betrag zu verwenden.",
+                )
+            if st.form_submit_button("Bankdaten speichern", type="primary"):
+                if not month_input.strip():
+                    st.error("Bitte einen Monat angeben (z. B. 2026-07).")
+                    st.stop()
+                # 0 EUR = Nutzer hat nichts eingegeben -> weiter die 20%-Regel nutzen
+                travel_reserve_arg = travel_reserve_input if travel_reserve_input > 0 else None
+                saved = profile_store.save_bank_checkin(
+                    month_input.strip(),
+                    income_input,
+                    fixed_costs_input,
+                    travel_reserve=travel_reserve_arg,
+                )
+                add_status(
+                    f"Bankdaten für {saved['month']} gespeichert. "
+                    f"Freier Betrag: {saved['free_amount']:.0f} €, "
+                    f"Reise-Rücklage: {saved['travel_reserve']:.0f} €."
+                )
+                st.rerun()
+
+        st.markdown("#### Zurücksetzen")
+        if st.session_state.confirm_reset_bank:
+            st.warning(
+                "Bankkonto und alle Banktransaktionen wirklich zurücksetzen? "
+                "Andere Profildaten (Interessen, Nachrichten etc.) bleiben erhalten."
+            )
+            rc1, rc2 = st.columns(2)
+            if rc1.button(
+                "Ja, zurücksetzen", key="confirm_reset_bank_yes", type="primary", use_container_width=True
+            ):
+                profile_store.reset_bank_account_for_demo()
+                st.session_state.confirm_reset_bank = False
+                add_status("Bankkonto für die Demo zurückgesetzt.")
+                st.rerun()
+            if rc2.button("Abbrechen", key="confirm_reset_bank_cancel", use_container_width=True):
+                st.session_state.confirm_reset_bank = False
+                st.rerun()
+        else:
+            if st.button("Bankkonto für Demo zurücksetzen"):
+                st.session_state.confirm_reset_bank = True
+                st.rerun()
+
+        st.markdown("#### Letzte Transaktionen")
+        transactions = profile_store.get_recent_bank_transactions(limit=10)
+        if not transactions:
+            st.info("Noch keine Banktransaktionen vorhanden.")
+        else:
+            for tx in transactions:
+                st.caption(
+                    f"{tx.get('created_at', '')} · {tx.get('amount', 0):.2f} € · "
+                    f"{tx.get('reason') or '-'} · Trip: {tx.get('trip_id') or '-'}"
+                )
+
+
 # ─────────────────────────── main ────────────────────────────────────────────
 
 def main():
@@ -1594,6 +1695,8 @@ def main():
                     st.session_state.trip_id = trip_id
                     st.session_state.chat_messages = []
                 st.rerun()
+
+    render_bank_account_section()
 
     trip = get_current_trip()
 

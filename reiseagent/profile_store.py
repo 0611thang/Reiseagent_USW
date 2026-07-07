@@ -393,6 +393,17 @@ def deduct_trip_cost(trip_id, amount, reason="trip"):
     }
 
 
+def get_recent_bank_transactions(limit=10):
+    """Gibt die letzten Banktransaktionen zurueck (neueste zuerst), oder [] wenn keine vorhanden."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM bank_transactions ORDER BY created_at DESC, id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def reset_bank_account_for_demo():
     """
     Setzt NUR die Bankkonto-Tabellen zurueck (bank_account, bank_transactions).
