@@ -100,6 +100,21 @@ ESTIMATE_COSTS = (
     '{{"kosten": [{{"id": "...", "preis_pro_person": 12.5}}, ...]}}'
 )
 
+INTERPRET_BANK_CHECKIN = (
+    "Du bist ein Finanz-Assistent. Lies die folgende Nachricht eines Nutzers und "
+    "erkenne sein monatliches Einkommen und seine festen monatlichen Ausgaben in Euro.\n\n"
+    "Nachricht: \"{text}\"\n\n"
+    "Regeln:\n"
+    "- income = monatliches Einkommen/Verdienst.\n"
+    "- fixed_costs = feste monatliche Ausgaben (Miete, Fixkosten).\n"
+    "- Nur Zahlen als Werte, keine Waehrungssymbole oder Text.\n"
+    "- Kannst du income oder fixed_costs nicht eindeutig erkennen, setze success auf false.\n\n"
+    "Antworte NUR als JSON ohne Markdown-Backticks, z.B.:\n"
+    '{{"success": true, "income": 3000.0, "fixed_costs": 2000.0}}\n'
+    "oder bei Unklarheit:\n"
+    '{{"success": false, "income": null, "fixed_costs": null}}'
+)
+
 ORCHESTRATOR = (
     "Du bist der Reise-Koordinator. Wähle genau ein Tool für die Anfrage des Nutzers aus. "
     "Nutze 'answer_question' wenn keine andere Aktion passt."

@@ -62,6 +62,24 @@ def init_db():
             source TEXT DEFAULT 'telegram',
             metadata_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS bank_account (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            month TEXT NOT NULL,
+            income REAL DEFAULT 0,
+            fixed_costs REAL DEFAULT 0,
+            free_amount REAL DEFAULT 0,
+            travel_reserve REAL DEFAULT 0,
+            current_balance REAL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS bank_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            amount REAL NOT NULL,
+            reason TEXT,
+            trip_id TEXT,
+            created_at TEXT NOT NULL
+        );
     """)
     conn.commit()
     conn.close()
@@ -242,3 +260,137 @@ def list_open_pending_prompts():
         d["metadata"] = json.loads(d["metadata_json"]) if d.get("metadata_json") else None
         results.append(d)
     return results
+
+
+def save_bank_checkin(month, income, fixed_costs, travel_reserve=None):
+    """
+    Speichert einen monatlichen Bankkonto-Check-in als neue Zeile.
+
+    free_amount = income - fixed_costs
+    travel_reserve: wenn nicht angegeben, automatisch max(free_amount * 0.2, 0).
+    current_balance wird bei jedem Check-in bewusst neu auf travel_reserve gesetzt
+    (nicht mit dem Vormonat verrechnet) - einfachste, verstaendlichste Variante fuer die Demo.
+    Negative Werte sind in der Testphase erlaubt, es wird nichts geprueft/gewarnt.
+    """
+    income = float(income)
+    fixed_costs = float(fixed_costs)
+    free_amount = income - fixed_costs
+
+    if travel_reserve is None:
+        travel_reserve = max(free_amount * 0.2, 0)
+    else:
+        travel_reserve = float(travel_reserve)
+
+    current_balance = travel_reserve
+    now = datetime.now().isoformat(timespec="seconds")
+
+    conn = _get_conn()
+    cursor = conn.execute(
+        """INSERT INTO bank_account
+           (month, income, fixed_costs, free_amount, travel_reserve, current_balance, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (month, income, fixed_costs, free_amount, travel_reserve, current_balance, now, now),
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+
+    return {
+        "id": new_id,
+        "month": month,
+        "income": income,
+        "fixed_costs": fixed_costs,
+        "free_amount": free_amount,
+        "travel_reserve": travel_reserve,
+        "current_balance": current_balance,
+    }
+
+
+def get_current_bank_account():
+    """Gibt den neuesten Bankkonto-Eintrag zurueck (unabhaengig vom Monat), oder None."""
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM bank_account ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_bank_account_for_month(month):
+    """
+    Kleiner Zusatz-Helfer (fuer run_monthly_bank_checkin): gibt den neuesten
+    Eintrag fuer genau diesen Monat zurueck, oder None.
+    """
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM bank_account WHERE month=? ORDER BY id DESC LIMIT 1",
+        (month,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def has_bank_transaction_for_trip(trip_id):
+    if not trip_id:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM bank_transactions WHERE trip_id=? LIMIT 1", (trip_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def deduct_trip_cost(trip_id, amount, reason="trip"):
+    """
+    Bucht Reisekosten vom simulierten Bankkonto ab.
+
+    - Kein Bankkonto vorhanden -> None (kein Crash, keine Vermutung).
+    - trip_id wurde schon einmal abgebucht -> keine zweite Abbuchung, verstaendliches dict zurueck.
+    - Negative current_balance ist in der Testphase erlaubt, keine Warnung.
+    """
+    account = get_current_bank_account()
+    if not account:
+        return None
+
+    if has_bank_transaction_for_trip(trip_id):
+        return {"deducted": False, "reason": "already_deducted", "trip_id": trip_id}
+
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return {"deducted": False, "reason": "invalid_amount", "trip_id": trip_id}
+
+    new_balance = account["current_balance"] - amount
+    now = datetime.now().isoformat(timespec="seconds")
+
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE bank_account SET current_balance=?, updated_at=? WHERE id=?",
+        (new_balance, now, account["id"]),
+    )
+    conn.execute(
+        "INSERT INTO bank_transactions (amount, reason, trip_id, created_at) VALUES (?,?,?,?)",
+        (amount, reason, trip_id, now),
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "deducted": True,
+        "amount": amount,
+        "new_balance": new_balance,
+        "trip_id": trip_id,
+        "reason": reason,
+    }
+
+
+def reset_bank_account_for_demo():
+    """
+    Setzt NUR die Bankkonto-Tabellen zurueck (bank_account, bank_transactions).
+    Andere Profildaten (interests, past_events, free_days, suggestions, messages,
+    pending_prompts) bleiben unberuehrt. Tabellen werden geleert, nicht gedroppt.
+    """
+    conn = _get_conn()
+    conn.execute("DELETE FROM bank_account")
+    conn.execute("DELETE FROM bank_transactions")
+    conn.commit()
+    conn.close()

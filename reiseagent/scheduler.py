@@ -5,9 +5,14 @@ import profile_store
 import store
 from agents.free_time_detector import detect_and_save_free_days
 from agents.suggestion_agent import create_suggestions_for_upcoming_free_days
-from providers.telegram import send_suggestion_proposal
+from providers.telegram import send_suggestion_proposal, send_message
 
 _last_run_date = None
+
+BANK_CHECKIN_MESSAGE = (
+    "Monats-Check-in: Wie hoch sind deine Einnahmen und Fixkosten diesen Monat? "
+    "Beispiel: Einnahmen 3000 €, Fixkosten 2000 €."
+)
 
 
 def _should_run_today():
@@ -69,6 +74,38 @@ def run_weekly_suggestions():
             print(f"[scheduler] Telegram nicht konfiguriert — Vorschlag nur in DB gespeichert")
 
 
+def run_monthly_bank_checkin(today=None):
+    """
+    Monatlicher Bankkonto-Check-in (Modul D Teil 1).
+
+    Sendet nur dann eine Telegram-Frage + legt einen pending_prompt an, wenn:
+      - heute der 1. Tag eines Monats ist,
+      - fuer diesen Monat noch kein Bankkonto-Eintrag existiert,
+      - und aktuell keine andere offene pending_prompt-Frage laeuft.
+    `today` ist optional (fuer Tests), sonst wird date.today() verwendet.
+    Kein Crash, wenn Telegram nicht konfiguriert ist (send_message ist fail-safe).
+    """
+    if today is None:
+        today = date.today()
+
+    if today.day != 1:
+        return {"sent": False, "reason": "not_first_of_month"}
+
+    profile_store.init_db()
+    month_str = today.strftime("%Y-%m")
+
+    if profile_store.get_bank_account_for_month(month_str):
+        return {"sent": False, "reason": "already_checked_in_this_month"}
+
+    if profile_store.get_open_pending_prompt():
+        return {"sent": False, "reason": "pending_prompt_already_open"}
+
+    send_message(BANK_CHECKIN_MESSAGE)
+    prompt_id = profile_store.create_pending_prompt("bank_checkin", metadata={"month": month_str})
+
+    return {"sent": True, "month": month_str, "pending_prompt_id": prompt_id}
+
+
 def scheduler_loop():
     """Hintergrundthread: prüft täglich ob es Samstag ist."""
     while True:
@@ -77,4 +114,8 @@ def scheduler_loop():
                 run_weekly_suggestions()
             except Exception as exc:
                 print(f"[scheduler] Fehler: {exc}")
+        try:
+            run_monthly_bank_checkin()
+        except Exception as exc:
+            print(f"[scheduler] Fehler beim Bankkonto-Check-in: {exc}")
         time.sleep(3600)  # Jede Stunde prüfen

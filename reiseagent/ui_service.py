@@ -4,7 +4,7 @@ Kein st.* hier. Nimmt Inputs, ruft Coordinator/Store/Provider, gibt Ergebnisse z
 """
 
 import store
-from agents import coordinator
+from agents import coordinator, bank_agent
 from providers.calendar import delete_trip_from_calendar
 
 
@@ -23,6 +23,8 @@ def create_trip(req: dict) -> tuple:
         "agent_insights": result["agent_insights"],
         "flight_updates": result.get("flight_updates"),
     })
+
+    bank_agent.maybe_deduct_trip_cost(trip_obj["id"], result["active_plan"], reason="trip_created")
 
     return trip_obj["id"], result["active_plan"]
 
@@ -51,6 +53,8 @@ def create_demo_trip() -> tuple:
         "checklist": cl,
         "agent_insights": result["agent_insights"],
     })
+
+    bank_agent.maybe_deduct_trip_cost(trip_obj["id"], result["active_plan"], reason="trip_created")
 
     return trip_obj["id"], result["active_plan"]
 

@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import store
-from agents import coordinator, replanning, budget, monitoring
+from agents import coordinator, replanning, budget, monitoring, bank_agent
 from agents.navigation import create_navigation_reminder
 from agents.daily_brief import create_daily_brief
 from agents.profile_learner import run_profile_update
@@ -26,6 +26,7 @@ from providers.navigation import get_route, get_both_routes
 from providers.telegram import (
     send_navigation_reminder,
     send_plan_update,
+    send_message,
     get_callback_updates,
     get_message_updates,
     answer_callback_query,
@@ -210,6 +211,8 @@ def _create_trip(request: dict, use_mock_weather: bool = False) -> dict:
         "flight_updates": result.get("flight_updates"),
     })
 
+    bank_agent.maybe_deduct_trip_cost(trip["id"], result["active_plan"], reason="trip_created")
+
     calendar_result = sync_full_plan_to_calendar(result["active_plan"], trip["id"])
     send_plan_update(result["active_plan"], calendar_synced=calendar_result.get("updated", False))
 
@@ -300,6 +303,7 @@ def accept_proposal(trip_id: str, proposal_id: str):
         "active_plan": new_plan,
         "proposals": trip["proposals"],
     })
+    bank_agent.maybe_deduct_trip_cost(trip_id, new_plan, reason="proposal_accepted")
     calendar_result = sync_full_plan_to_calendar(new_plan, trip_id)
     send_plan_update(new_plan, calendar_synced=calendar_result.get("updated", False))
 
@@ -491,6 +495,33 @@ def list_pending_prompts():
     profile_store.init_db()
     return {"open_pending_prompts": profile_store.list_open_pending_prompts()}
 
+
+@app.post("/api/scheduler/bank-checkin/run")
+def run_bank_checkin_now(today: Optional[str] = None):
+    """
+    Manueller Trigger fuer den monatlichen Bankkonto-Check-in (für Tests).
+    today optional als 'YYYY-MM-DD' um ein bestimmtes Datum zu simulieren.
+    """
+    parsed_today = None
+    if today:
+        try:
+            parsed_today = datetime.fromisoformat(today).date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="today muss im Format YYYY-MM-DD sein.")
+    try:
+        result = scheduler.run_monthly_bank_checkin(today=parsed_today)
+        return {"status": "ok", **result}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+@app.post("/api/bank/reset-demo")
+def reset_bank_demo():
+    """Setzt nur die Bankkonto-Daten zurück (für einen sauberen Demo-Start). Andere Profildaten bleiben unberührt."""
+    profile_store.init_db()
+    profile_store.reset_bank_account_for_demo()
+    return {"status": "ok", "reset": True}
+
 _telegram_update_offset = None
 
 
@@ -541,6 +572,8 @@ def _handle_telegram_proposal_decision(action: str, trip_id: str, proposal_id: s
             "proposals": trip["proposals"],
         })
 
+        bank_agent.maybe_deduct_trip_cost(trip_id, new_plan, reason="proposal_accepted")
+
         calendar_result = sync_full_plan_to_calendar(new_plan, trip_id)
         send_plan_update(new_plan, calendar_synced=calendar_result.get("updated", False))
 
@@ -585,6 +618,7 @@ def _handle_telegram_suggestion_decision(action: str, callback_data: dict) -> st
             "active_plan": new_plan,
             "agent_insights": result["agent_insights"],
         })
+        bank_agent.maybe_deduct_trip_cost(trip["id"], new_plan, reason="trip_created")
         calendar_result = sync_full_plan_to_calendar(new_plan, trip["id"])
         send_plan_update(new_plan, calendar_synced=calendar_result.get("updated", False))
         for s in profile_store.get_suggestions_for_date(date_str):
@@ -594,12 +628,38 @@ def _handle_telegram_suggestion_decision(action: str, callback_data: dict) -> st
     return "Unbekannte Aktion."
 
 
-def _handle_bank_checkin_reply(prompt: dict, message: dict) -> None:
-    """Platzhalter: Bankkonto-Check-in-Agent wird in einem spaeteren Schritt gebaut."""
-    print(
-        "[pending_prompt] bank_checkin-Antwort erhalten (Stub, noch nicht ausgewertet): "
-        f"prompt_id={prompt['id']} text='{message.get('text')}'"
+def _handle_bank_checkin_reply(prompt: dict, message: dict) -> bool:
+    """
+    Interpretiert die Freitextantwort auf den monatlichen Bankkonto-Check-in.
+
+    Gibt True zurück, wenn die Antwort erfolgreich erkannt und gespeichert wurde
+    (die pending_prompt-Frage darf dann als resolved markiert werden).
+    Gibt False zurück bei unklarer Antwort — die Frage bleibt bewusst offen,
+    damit der Nutzer nochmal antworten kann.
+    """
+    result = bank_agent.interpret_bank_checkin(message.get("text", ""))
+
+    if not result.get("success"):
+        send_message(
+            "Ich konnte die Zahlen nicht eindeutig erkennen. "
+            "Bitte antworte z. B.: Einnahmen 3000 €, Fixkosten 2000 €."
+        )
+        print(f"[pending_prompt] bank_checkin unklar: '{message.get('text')}'")
+        return False
+
+    month = datetime.now().strftime("%Y-%m")
+    saved = profile_store.save_bank_checkin(
+        month,
+        result["income"],
+        result["fixed_costs"],
+        travel_reserve=result["travel_reserve"],
     )
+    send_message(
+        f"Danke, gespeichert. Freier Betrag: {saved['free_amount']:.0f} €, "
+        f"vorgeschlagene Reise-Rücklage: {saved['travel_reserve']:.0f} €."
+    )
+    print(f"[pending_prompt] bank_checkin gespeichert: {saved}")
+    return True
 
 
 def _handle_feedback_reply(prompt: dict, message: dict) -> None:
@@ -623,9 +683,15 @@ def _route_pending_prompt_message(message: dict) -> None:
         return
 
     prompt_type = prompt.get("type")
+
     if prompt_type == "bank_checkin":
-        _handle_bank_checkin_reply(prompt, message)
-    elif prompt_type == "feedback":
+        success = _handle_bank_checkin_reply(prompt, message)
+        if success:
+            profile_store.resolve_pending_prompt(prompt["id"])
+        # bei unklarer Antwort bleibt die Frage bewusst offen
+        return
+
+    if prompt_type == "feedback":
         _handle_feedback_reply(prompt, message)
     else:
         print(f"[pending_prompt] Unbekannter Prompt-Typ '{prompt_type}' - keine Aktion.")
