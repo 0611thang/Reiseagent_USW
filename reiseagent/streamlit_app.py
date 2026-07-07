@@ -1473,24 +1473,29 @@ def render_trip_overview(compact: bool = False):
 
 
 def render_bank_account_section():
-    """Einfache Verwaltung für das simulierte Bankkonto (Modul D). Rein lesend/
+    """Einfache Verwaltung für das Reisebudget (Modul D). Rein lesend/
     schreibend über profile_store — keine Telegram-, Kalender- oder Trip-Aktionen."""
-    with st.expander("Simuliertes Bankkonto"):
+    with st.expander("Reisebudget"):
         account = profile_store.get_current_bank_account()
 
         st.markdown("#### Aktueller Stand")
         if not account:
-            st.info("Noch keine Bankdaten gespeichert.")
+            st.info("Noch kein Reisebudget gespeichert.")
         else:
             c1, c2, c3 = st.columns(3)
             c1.metric("Monat", account["month"])
             c1.metric("Einnahmen", f"{account['income']:.0f} €")
             c2.metric("Fixkosten", f"{account['fixed_costs']:.0f} €")
-            c2.metric("Freier Betrag", f"{account['free_amount']:.0f} €")
-            c3.metric("Reise-Rücklage", f"{account['travel_reserve']:.0f} €")
-            c3.metric("Aktueller Kontostand", f"{account['current_balance']:.0f} €")
+            c2.metric("Frei verfügbar", f"{account['free_amount']:.0f} €")
+            c3.metric("Für Reisen eingeplant", f"{account['travel_reserve']:.0f} €")
+            # Direkt nach dem Speichern sind travel_reserve und current_balance
+            # identisch - dann nicht redundant zweimal denselben Betrag zeigen.
+            if round(account["current_balance"], 2) == round(account["travel_reserve"], 2):
+                c3.caption("Noch keine Reisekosten verbucht")
+            else:
+                c3.metric("Noch verfügbar", f"{account['current_balance']:.0f} €")
 
-        st.markdown("#### Bankkonto bearbeiten")
+        st.markdown("#### Reisebudget bearbeiten")
         with st.form("bank_checkin_form"):
             bc1, bc2 = st.columns(2)
             with bc1:
@@ -1512,13 +1517,13 @@ def render_bank_account_section():
                     step=50.0,
                 )
                 travel_reserve_input = st.number_input(
-                    "Reise-Rücklage (EUR)",
+                    "Für Reisen eingeplant (EUR)",
                     min_value=0.0,
                     value=0.0,
                     step=10.0,
-                    help="Leer/0 lassen, um automatisch 20 % vom freien Betrag zu verwenden.",
+                    help="Leer/0 lassen, um automatisch 20 % vom frei verfügbaren Betrag zu verwenden.",
                 )
-            if st.form_submit_button("Bankdaten speichern", type="primary"):
+            if st.form_submit_button("Reisebudget speichern", type="primary"):
                 if not month_input.strip():
                     st.error("Bitte einen Monat angeben (z. B. 2026-07).")
                     st.stop()
@@ -1531,16 +1536,16 @@ def render_bank_account_section():
                     travel_reserve=travel_reserve_arg,
                 )
                 add_status(
-                    f"Bankdaten für {saved['month']} gespeichert. "
-                    f"Freier Betrag: {saved['free_amount']:.0f} €, "
-                    f"Reise-Rücklage: {saved['travel_reserve']:.0f} €."
+                    f"Reisebudget für {saved['month']} gespeichert. "
+                    f"Frei verfügbar: {saved['free_amount']:.0f} €, "
+                    f"für Reisen eingeplant: {saved['travel_reserve']:.0f} €."
                 )
                 st.rerun()
 
         st.markdown("#### Zurücksetzen")
         if st.session_state.confirm_reset_bank:
             st.warning(
-                "Bankkonto und alle Banktransaktionen wirklich zurücksetzen? "
+                "Reisebudget und alle Buchungen wirklich zurücksetzen? "
                 "Andere Profildaten (Interessen, Nachrichten etc.) bleiben erhalten."
             )
             rc1, rc2 = st.columns(2)
@@ -1549,13 +1554,13 @@ def render_bank_account_section():
             ):
                 profile_store.reset_bank_account_for_demo()
                 st.session_state.confirm_reset_bank = False
-                add_status("Bankkonto für die Demo zurückgesetzt.")
+                add_status("Reisebudget wurde zurückgesetzt.")
                 st.rerun()
             if rc2.button("Abbrechen", key="confirm_reset_bank_cancel", use_container_width=True):
                 st.session_state.confirm_reset_bank = False
                 st.rerun()
         else:
-            if st.button("Bankkonto für Demo zurücksetzen"):
+            if st.button("Reisebudget zurücksetzen"):
                 st.session_state.confirm_reset_bank = True
                 st.rerun()
 

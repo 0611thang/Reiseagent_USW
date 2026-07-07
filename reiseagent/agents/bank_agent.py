@@ -168,8 +168,8 @@ def _build_success_result(income, fixed_costs, travel_reserve=None):
         "free_amount": round(free_amount, 2),
         "travel_reserve": round(travel_reserve, 2),
         "message": (
-            f"Freier Betrag: {free_amount:.0f} €, "
-            f"Reise-Rücklage: {travel_reserve:.0f} €."
+            f"Frei verfügbar: {free_amount:.0f} €, "
+            f"für Reisen eingeplant: {travel_reserve:.0f} €."
         ),
     }
 

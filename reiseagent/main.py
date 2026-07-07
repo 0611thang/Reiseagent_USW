@@ -683,10 +683,7 @@ def _handle_bank_checkin_reply(prompt: dict, message: dict) -> bool:
         result["fixed_costs"],
         travel_reserve=result["travel_reserve"],
     )
-    send_message(
-        f"Danke, gespeichert. Freier Betrag: {saved['free_amount']:.0f} €, "
-        f"vorgeschlagene Reise-Rücklage: {saved['travel_reserve']:.0f} €."
-    )
+    send_message("Danke, dein Reisebudget wurde gespeichert.\n\n" + _format_bank_status_text(saved))
     print(f"[pending_prompt] bank_checkin gespeichert: {saved}")
     return True
 
@@ -774,24 +771,41 @@ def _first_word(text: str) -> str:
     return stripped.split(maxsplit=1)[0].lower()
 
 
+def _format_bank_status_text(account: dict) -> str:
+    """
+    Baut die Reisebudget-Übersicht als Text auf - einheitlich für /bank_status
+    und für die Bestätigung nach dem Speichern.
+
+    Direkt nach dem Speichern ist current_balance immer identisch mit
+    travel_reserve (siehe profile_store.save_bank_checkin). Um das nicht
+    redundant zweimal anzuzeigen, wird "Noch verfügbar" nur gezeigt, wenn
+    sich beide Werte tatsächlich unterscheiden (z. B. nach einer Abbuchung).
+    """
+    lines = [
+        f"Reisebudget – {account['month']}",
+        f"Einnahmen: {account['income']:.0f} €",
+        f"Fixkosten: {account['fixed_costs']:.0f} €",
+        f"Frei verfügbar: {account['free_amount']:.0f} €",
+        f"Für Reisen eingeplant: {account['travel_reserve']:.0f} €",
+    ]
+    if round(account["current_balance"], 2) == round(account["travel_reserve"], 2):
+        lines.append("Status: Noch keine Reisekosten verbucht")
+    else:
+        lines.append(f"Noch verfügbar: {account['current_balance']:.0f} €")
+    return "\n".join(lines)
+
+
 def _handle_bank_status_command() -> None:
     account = profile_store.get_current_bank_account()
     if not account:
-        send_message("Noch keine Bankkonto-Daten gespeichert.")
+        send_message("Noch kein Reisebudget gespeichert.")
         return
-    send_message(
-        f"Simuliertes Bankkonto ({account['month']}):\n"
-        f"Einnahmen: {account['income']:.0f} €\n"
-        f"Fixkosten: {account['fixed_costs']:.0f} €\n"
-        f"Freier Betrag: {account['free_amount']:.0f} €\n"
-        f"Reise-Rücklage: {account['travel_reserve']:.0f} €\n"
-        f"Aktueller Kontostand: {account['current_balance']:.0f} €"
-    )
+    send_message(_format_bank_status_text(account))
 
 
 def _handle_bank_reset_command() -> None:
     profile_store.reset_bank_account_for_demo()
-    send_message("Simuliertes Bankkonto wurde für die Demo zurückgesetzt.")
+    send_message("Reisebudget wurde zurückgesetzt.")
 
 
 def _handle_bank_open_question_command() -> None:
@@ -801,10 +815,10 @@ def _handle_bank_open_question_command() -> None:
 
     profile_store.create_pending_prompt("bank_checkin", metadata={"source": "manual_command"})
     send_message(
-        "Okay, ich aktualisiere dein simuliertes Bankkonto.\n"
+        "Okay, ich aktualisiere dein Reisebudget.\n"
         "Bitte antworte mit deinen Zahlen, z. B.:\n\n"
         "Einnahmen: 603, Fixkosten: 500\n\n"
-        "Optional mit eigener Reise-Rücklage:\n\n"
+        "Optional mit eigener Reiserücklage:\n\n"
         "Einnahmen: 603, Fixkosten: 500, Reiserücklage: 50\n\n"
         "Du kannst auch nur Zahlen schicken, z. B.:\n"
         "603 500"
@@ -831,10 +845,7 @@ def _handle_spontaneous_bank_message(text: str) -> None:
         result["fixed_costs"],
         travel_reserve=result["travel_reserve"],
     )
-    send_message(
-        f"Bankkonto aktualisiert. Freier Betrag: {saved['free_amount']:.0f} €, "
-        f"Reise-Rücklage: {saved['travel_reserve']:.0f} €."
-    )
+    send_message("Reisebudget aktualisiert.\n\n" + _format_bank_status_text(saved))
     print(f"[bank] Spontane Nachricht gespeichert: {saved}")
 
 
