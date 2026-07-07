@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import store
-from agents import coordinator, replanning, budget, monitoring, bank_agent
+from agents import coordinator, replanning, budget, monitoring, bank_agent, feedback_agent
 from agents.navigation import create_navigation_reminder
 from agents.daily_brief import create_daily_brief
 from agents.profile_learner import run_profile_update
@@ -522,6 +522,25 @@ def reset_bank_demo():
     profile_store.reset_bank_account_for_demo()
     return {"status": "ok", "reset": True}
 
+
+@app.post("/api/scheduler/feedback/run")
+def run_feedback_check_now(today: Optional[str] = None):
+    """
+    Manueller Trigger für den täglichen Trip-Ende-Feedback-Check (für Tests).
+    today optional als 'YYYY-MM-DD' um ein bestimmtes Datum zu simulieren.
+    """
+    parsed_today = None
+    if today:
+        try:
+            parsed_today = datetime.fromisoformat(today).date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="today muss im Format YYYY-MM-DD sein.")
+    try:
+        result = scheduler.run_trip_feedback_check(today=parsed_today)
+        return {"status": "ok", **result}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
 _telegram_update_offset = None
 
 
@@ -662,12 +681,39 @@ def _handle_bank_checkin_reply(prompt: dict, message: dict) -> bool:
     return True
 
 
-def _handle_feedback_reply(prompt: dict, message: dict) -> None:
-    """Platzhalter: Feedback-Agent wird in einem spaeteren Schritt gebaut."""
-    print(
-        "[pending_prompt] feedback-Antwort erhalten (Stub, noch nicht ausgewertet): "
-        f"prompt_id={prompt['id']} text='{message.get('text')}'"
-    )
+def _handle_feedback_reply(prompt: dict, message: dict) -> bool:
+    """
+    Interpretiert die Freitextantwort auf die Feedback-Frage am Ende einer Reise.
+
+    Gibt True zurück, wenn Feedback erfolgreich erkannt und gespeichert wurde
+    (die pending_prompt-Frage darf dann als resolved markiert werden), oder
+    wenn der zugehörige Trip nicht mehr existiert (dann wird die Frage sauber
+    abgebrochen statt haengen zu bleiben). Gibt False zurück bei unklarer
+    Antwort — die Frage bleibt offen, damit der Nutzer nochmal antworten kann.
+    """
+    trip_id = prompt.get("trip_id")
+    trip = store.get_trip(trip_id) if trip_id else None
+
+    if trip_id and not trip:
+        send_message("Die zugehörige Reise wurde nicht mehr gefunden. Die Feedback-Frage wird geschlossen.")
+        print(f"[pending_prompt] feedback: Trip {trip_id} nicht mehr vorhanden - Frage wird abgebrochen.")
+        return True
+
+    feedback_items = feedback_agent.interpret_feedback(trip or {}, message.get("text", ""))
+
+    if not feedback_items:
+        send_message(
+            "Ich konnte noch keine klare Bewertung erkennen. "
+            "Bitte antworte z. B.: Museen 5/5, Essen 3/5."
+        )
+        print(f"[pending_prompt] feedback unklar: '{message.get('text')}'")
+        return False
+
+    destination = (trip or {}).get("request", {}).get("destination", "")
+    saved = profile_store.save_trip_feedback(trip_id, destination, feedback_items)
+    send_message("Danke für dein Feedback. Ich habe deine Bewertung gespeichert.")
+    print(f"[pending_prompt] feedback gespeichert: {saved}")
+    return True
 
 
 def _route_pending_prompt_message(message: dict) -> None:
@@ -692,10 +738,13 @@ def _route_pending_prompt_message(message: dict) -> None:
         return
 
     if prompt_type == "feedback":
-        _handle_feedback_reply(prompt, message)
-    else:
-        print(f"[pending_prompt] Unbekannter Prompt-Typ '{prompt_type}' - keine Aktion.")
+        success = _handle_feedback_reply(prompt, message)
+        if success:
+            profile_store.resolve_pending_prompt(prompt["id"])
+        # bei unklarer Antwort bleibt die Frage bewusst offen
+        return
 
+    print(f"[pending_prompt] Unbekannter Prompt-Typ '{prompt_type}' - keine Aktion.")
     profile_store.resolve_pending_prompt(prompt["id"])
 
 

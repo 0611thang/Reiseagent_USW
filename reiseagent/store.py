@@ -2,6 +2,7 @@ import uuid
 import json
 import sqlite3
 import os
+from datetime import datetime
 from typing import Optional
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "trips.db")
@@ -73,6 +74,19 @@ def list_trips() -> list:
     rows = conn.execute("SELECT data FROM trips").fetchall()
     conn.close()
     return [json.loads(row[0]) for row in rows]
+
+
+def mark_feedback_requested(trip_id: str) -> Optional[dict]:
+    """
+    Setzt feedback_requested=True + feedback_requested_at auf dem Trip-JSON-Blob.
+    Kein Schema-Feld, keine Migration noetig - trip.get("feedback_requested")
+    ist bei allen aelteren Trips einfach None/falsy.
+    Kein Crash, wenn der Trip nicht existiert (update_trip gibt dann None zurueck).
+    """
+    return update_trip(trip_id, {
+        "feedback_requested": True,
+        "feedback_requested_at": datetime.now().isoformat(timespec="seconds"),
+    })
 
 
 def delete_trip(trip_id: str) -> bool:

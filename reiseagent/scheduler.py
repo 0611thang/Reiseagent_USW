@@ -1,5 +1,5 @@
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import profile_store
 import store
@@ -106,6 +106,101 @@ def run_monthly_bank_checkin(today=None):
     return {"sent": True, "month": month_str, "pending_prompt_id": prompt_id}
 
 
+def _determine_trip_end_date(trip):
+    """
+    Ermittelt robust das Enddatum einer Reise, oder None wenn nicht sicher
+    bestimmbar (dann wird der Trip in run_trip_feedback_check uebersprungen).
+
+    Reihenfolge (erstes gueltiges Feld gewinnt):
+      1. request["end_date"] / request["return_date"] (falls im Projekt gesetzt)
+      2. letzter Tag des aktiven Plans (active_plan["days"][-1]["date"]) -
+         das ist bereits korrekt aus start_date + duration_days berechnet
+      3. request["start_date"] + duration_days - 1 (bzw. departure_date als Ersatz)
+    """
+    request = trip.get("request") or {}
+
+    for field in ("end_date", "return_date"):
+        raw = request.get(field)
+        if raw:
+            try:
+                return date.fromisoformat(raw)
+            except ValueError:
+                pass
+
+    active_plan = trip.get("active_plan") or {}
+    days = active_plan.get("days") or []
+    if days:
+        last_date = days[-1].get("date")
+        if last_date:
+            try:
+                return date.fromisoformat(last_date)
+            except ValueError:
+                pass
+
+    start_str = request.get("start_date") or request.get("departure_date")
+    duration_days = request.get("duration_days")
+    if start_str and duration_days:
+        try:
+            start = date.fromisoformat(start_str)
+            return start + timedelta(days=int(duration_days) - 1)
+        except (ValueError, TypeError):
+            pass
+
+    return None
+
+
+def run_trip_feedback_check(today=None):
+    """
+    Taeglicher Trip-Ende-Check (Modul D Teil 2): fragt nach dem Ende einer
+    Reise per Telegram nach Feedback - aber nur einmal pro Reise und nie
+    parallel zu einer anderen offenen pending_prompt-Frage (z.B. Bankkonto).
+
+    `today` ist optional (fuer Tests), sonst wird date.today() verwendet.
+    Kein Crash, wenn Telegram nicht konfiguriert ist oder ein Trip kein
+    sicher bestimmbares Enddatum hat (dieser Trip wird dann uebersprungen).
+    """
+    if today is None:
+        today = date.today()
+
+    profile_store.init_db()
+    store.init_db()
+
+    asked_trip_id = None
+    skipped_no_open_slot = []
+
+    for trip in store.list_trips():
+        if trip.get("feedback_requested"):
+            continue
+
+        end_date = _determine_trip_end_date(trip)
+        if end_date is None or end_date != today:
+            continue
+
+        # Keine zweite offene Frage parallel stellen (z.B. laeuft noch der
+        # Bankkonto-Check-in) - spaeter (naechster Lauf) erneut versuchen.
+        if profile_store.get_open_pending_prompt():
+            skipped_no_open_slot.append(trip["id"])
+            continue
+
+        destination = (trip.get("request") or {}).get("destination", "deinem Ziel")
+        message = (
+            f"Deine Reise nach {destination} ist beendet. Wie zufrieden warst du mit "
+            "Kultur, Essen, Natur, Sehenswürdigkeiten oder Shopping? "
+            "Du kannst z. B. antworten: Museen 5/5, Essen 3/5."
+        )
+        send_message(message)
+        profile_store.create_pending_prompt("feedback", trip_id=trip["id"])
+        store.mark_feedback_requested(trip["id"])
+
+        asked_trip_id = trip["id"]
+        break  # MVP: pro Lauf nur eine Feedback-Frage stellen (Regel "nur eine offene Frage")
+
+    return {
+        "asked_trip_id": asked_trip_id,
+        "skipped_no_open_slot": skipped_no_open_slot,
+    }
+
+
 def scheduler_loop():
     """Hintergrundthread: prüft täglich ob es Samstag ist."""
     while True:
@@ -118,4 +213,8 @@ def scheduler_loop():
             run_monthly_bank_checkin()
         except Exception as exc:
             print(f"[scheduler] Fehler beim Bankkonto-Check-in: {exc}")
+        try:
+            run_trip_feedback_check()
+        except Exception as exc:
+            print(f"[scheduler] Fehler beim Trip-Feedback-Check: {exc}")
         time.sleep(3600)  # Jede Stunde prüfen

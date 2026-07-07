@@ -115,6 +115,26 @@ INTERPRET_BANK_CHECKIN = (
     '{{"success": false, "income": null, "fixed_costs": null}}'
 )
 
+INTERPRET_TRIP_FEEDBACK = (
+    "Du bist ein Reise-Feedback-Assistent. Lies die folgende Nachricht eines Nutzers "
+    "über seine gerade beendete Reise und erkenne strukturiertes Feedback.\n\n"
+    "Nachricht: \"{text}\"\n\n"
+    "Erlaubte Kategorien (nur diese, keine anderen erfinden):\n"
+    "- culture: Museen, Kunst, Kultur, historische Gebäude, Architektur\n"
+    "- food: Essen, Cafés, Restaurants\n"
+    "- nature: Parks, Natur, Seen, Spaziergänge\n"
+    "- sightseeing: Sehenswürdigkeiten, Aussichtspunkte, Stadtführungen\n"
+    "- shopping: Shopping, Märkte, Läden\n\n"
+    "Regeln:\n"
+    "- rating ist eine Zahl von 1 bis 5.\n"
+    "- Nur Kategorien zurückgeben, die der Nutzer klar erwähnt UND klar bewertet hat.\n"
+    "- Keine Kategorie raten oder ergänzen, die nicht im Text vorkommt.\n"
+    "- comment ist ein kurzer Ausschnitt aus der Nutzeraussage zu dieser Kategorie.\n"
+    "- Ist gar keine klare Bewertung erkennbar, gib eine leere Liste zurück.\n\n"
+    "Antworte NUR als JSON ohne Markdown-Backticks:\n"
+    '{{"feedback": [{{"category": "culture", "rating": 5, "comment": "Museen waren super"}}, ...]}}'
+)
+
 ORCHESTRATOR = (
     "Du bist der Reise-Koordinator. Wähle genau ein Tool für die Anfrage des Nutzers aus. "
     "Nutze 'answer_question' wenn keine andere Aktion passt."

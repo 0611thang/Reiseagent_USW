@@ -80,6 +80,16 @@ def init_db():
             trip_id TEXT,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS trip_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trip_id TEXT NOT NULL,
+            destination TEXT,
+            category TEXT NOT NULL,
+            rating INTEGER NOT NULL,
+            comment TEXT,
+            feedback_date TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
     """)
     conn.commit()
     conn.close()
@@ -394,3 +404,91 @@ def reset_bank_account_for_demo():
     conn.execute("DELETE FROM bank_transactions")
     conn.commit()
     conn.close()
+
+
+TRIP_FEEDBACK_CATEGORIES = {"culture", "food", "nature", "sightseeing", "shopping"}
+
+
+def save_trip_feedback(trip_id, destination, feedback_items):
+    """
+    Speichert Reise-Feedback als eigene Zeilen in trip_feedback (bewusst NICHT
+    in interests - dort bleibt nur die passive Keyword-Zaehlung aus dem
+    Profil-Lerner unveraendert).
+
+    feedback_items: Liste von {"category": ..., "rating": ..., "comment": ...}.
+    - Unbekannte Kategorien (nicht in TRIP_FEEDBACK_CATEGORIES) werden ignoriert.
+    - rating wird auf 1..5 begrenzt; fehlt rating oder ist es keine Zahl, wird
+      der Eintrag ebenfalls ignoriert (kein Raten).
+    - leere Kommentare sind erlaubt.
+    - leere feedback_items -> nichts wird gespeichert, [] wird zurueckgegeben.
+    Wirft nie eine Exception nach aussen.
+    """
+    if not trip_id or not feedback_items:
+        return []
+
+    now = datetime.now().isoformat(timespec="seconds")
+    saved = []
+
+    try:
+        conn = _get_conn()
+        for item in feedback_items:
+            category = (item.get("category") or "").strip().lower()
+            if category not in TRIP_FEEDBACK_CATEGORIES:
+                continue
+
+            try:
+                rating = int(item.get("rating"))
+            except (TypeError, ValueError):
+                continue
+            rating = max(1, min(rating, 5))
+
+            comment = item.get("comment") or ""
+
+            cursor = conn.execute(
+                """INSERT INTO trip_feedback
+                   (trip_id, destination, category, rating, comment, feedback_date, created_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (trip_id, destination, category, rating, comment, now, now),
+            )
+            saved.append({
+                "id": cursor.lastrowid,
+                "trip_id": trip_id,
+                "destination": destination,
+                "category": category,
+                "rating": rating,
+                "comment": comment,
+                "feedback_date": now,
+            })
+        conn.commit()
+        conn.close()
+    except Exception:
+        return saved
+
+    return saved
+
+
+def get_trip_feedback(trip_id=None):
+    """Gibt gespeichertes Feedback zurueck. Ohne trip_id: alles, sortiert nach Datum."""
+    conn = _get_conn()
+    if trip_id:
+        rows = conn.execute(
+            "SELECT * FROM trip_feedback WHERE trip_id=? ORDER BY created_at ASC, id ASC",
+            (trip_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM trip_feedback ORDER BY created_at ASC, id ASC"
+        ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def has_trip_feedback(trip_id):
+    if not trip_id:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM trip_feedback WHERE trip_id=? LIMIT 1", (trip_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
