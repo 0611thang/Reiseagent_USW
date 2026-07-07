@@ -4,6 +4,61 @@ Alle Änderungen am Projekt werden hier dokumentiert.
 Sortierung: **neueste Einträge oben**.
 
 ---
+## [2026-07-07] Feature: Reisebudget-UI, Telegram-Kommandos und Feinschliff
+
+**Status:** Merged  
+**Datum & Uhrzeit:** 2026-07-07  
+**Autor:** Ibrahim Danisman  
+**Commits:**
+- `9c05abc` – Streamlit-Verwaltung für das Reisebudget
+- `85466f7` – Verbesserte Telegram-Bedienung (`/bank`, geführte Eingabe, direkte Eingabe)
+- `8ed797b` – Fix für Telegram-Gruppen-Kommandos mit Bot-Erwähnung
+- `dfee6e0` – Professionellere Begriffe und übersichtlichere Darstellung
+
+### Zweck
+Baut auf Modul D (siehe Eintrag unten) auf und macht das simulierte Bankkonto direkt bedienbar: eine Verwaltungsoberfläche in Streamlit sowie komfortable Telegram-Kommandos, damit Bankdaten nicht mehr nur über eine zuvor geöffnete Frage gesetzt werden können.
+
+### Streamlit-Verwaltung für das Reisebudget
+- Neuer Bereich „Reisebudget" in der Streamlit-App.
+- Anzeige von Monat, Einnahmen, Fixkosten, frei verfügbarem Betrag, für Reisen eingeplantem Betrag und verfügbarem Restbudget.
+- Bankdaten können direkt in der UI bearbeitet werden, Reisebudget ist manuell setzbar.
+- Reset-Funktion für Reisebudget/Banktransaktionen, Anzeige der letzten Transaktionen.
+- Keine Seiteneffekte: kein Telegram-Versand, kein Kalender-Sync, keine Reise-Erstellung oder -Löschung.
+
+### Verbesserte Telegram-Bedienung
+- `/bank` öffnet jetzt eine geführte Eingabe über `pending_prompt`; die nächste Antwort wird automatisch zugeordnet.
+- Nach `/bank` reichen reine Zahlen, z. B. `603 500` oder `603 500 50` (Einnahmen, Fixkosten, optional manuelles Reisebudget).
+- Direkte Eingaben ohne vorherige Frage funktionieren ebenfalls, z. B. `/bank Einnahmen 603, Fixkosten 500`.
+- Eindeutige Bankkonto-/Budget-Nachrichten werden auch ohne offene Frage erkannt – normale Nachrichten, Feedback wie „Museen 5/5" oder Sätze wie „Ich habe 500 Euro ausgegeben" werden bewusst **nicht** als Bankdaten interpretiert.
+- Feedback-Routing bleibt unverändert und läuft weiterhin ausschließlich über offene `feedback`-Fragen.
+
+### Neue Telegram-Kommandos
+- `/bank` – Reisebudget eintragen oder aktualisieren.
+- `/bank_status` – gespeichertes Reisebudget anzeigen.
+- `/bank_reset` – Reisebudget-Daten zurücksetzen.
+- Zusätzliche Aliase `/konto_status` und `/konto_reset` werden unterstützt.
+- Bot-Kommandos werden über Telegrams `setMyCommands` registriert, fail-safe ohne Crash bei fehlender Telegram-Konfiguration.
+
+### Fix: Bot-Erwähnung in Telegram-Gruppen
+- Telegram macht in Gruppen aus `/bank` beim Antippen automatisch `/bank@USW_ReiseplanerBot`.
+- Neue Normalisierung entfernt den Bot-Namen aus dem ersten Slash-Kommando, bevor es interpretiert wird.
+- `/bank@USW_ReiseplanerBot`, `/bank_status@USW_ReiseplanerBot` und `/bank_reset@USW_ReiseplanerBot` funktionieren jetzt wie ohne Bot-Erwähnung.
+- Direkte Eingaben wie `/bank@USW_ReiseplanerBot Einnahmen 603, Fixkosten 500` funktionieren ebenfalls.
+
+### Professionellere Begriffe und Darstellung
+- „Simuliertes Bankkonto" → „Reisebudget", „Reise-Rücklage" → „Für Reisen eingeplant", „Aktueller Kontostand" → „Noch verfügbar", „Freier Betrag" → „Frei verfügbar".
+- Reset-Meldung ist professioneller formuliert und erwähnt nicht mehr „für die Demo".
+- Sind „Für Reisen eingeplant" und „Noch verfügbar" direkt nach dem Speichern identisch, wird der Betrag nicht mehr doppelt angezeigt – stattdessen erscheint „Status: Noch keine Reisekosten verbucht". Sobald Reisekosten abgezogen wurden, werden beide Werte wieder getrennt angezeigt.
+
+### Tests
+- `py_compile` auf allen geänderten Dateien erfolgreich.
+- `git diff --check` erfolgreich.
+- Mock-/Logiktests ohne echte Telegram-Nachrichten: `/bank` öffnet die geführte Eingabe, reine Zahlen nach `/bank` funktionieren, direkte Bank-Eingabe funktioniert, `/bank_status` und `/bank_reset` funktionieren, Bot-Mention-Fix funktioniert.
+- Feedback-Routing bleibt unverändert; normale Nachrichten ohne Bankkonto-Intent bleiben unverändert.
+- Streamlit-UI crasht nicht, wenn noch keine Bankdaten existieren.
+- Reset löscht nachweislich nur Reisebudget/Banktransaktionen, keine Reisen, kein Feedback, keine Interessen.
+
+---
 ## [2026-07-07] Feature: Modul D – Simuliertes Bankkonto und Feedback-Agent
 
 **Status:** Merged  
