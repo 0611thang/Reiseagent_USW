@@ -376,6 +376,36 @@ def get_message_updates(offset: int = None, timeout: int = 0) -> list:
         return []
 
 
+def set_bot_commands() -> bool:
+    """
+    Setzt die sichtbaren Bot-Kommandos in Telegram (setMyCommands), damit sie
+    im Eingabefeld als Vorschlagsliste erscheinen. Additiv, wird einmalig
+    beim App-Start versucht (siehe main.py).
+
+    Fail-safe: gibt False zurueck bei fehlendem Bot-Token oder Fehlern, kein Crash.
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return False
+
+    commands = [
+        {"command": "bank", "description": "Bankkonto eintragen oder aktualisieren"},
+        {"command": "bank_status", "description": "Bankkonto anzeigen"},
+        {"command": "bank_reset", "description": "Demo-Bankkonto zurücksetzen"},
+    ]
+
+    try:
+        url = f"https://api.telegram.org/bot{token}/setMyCommands"
+        response = httpx.post(url, json={"commands": commands}, timeout=5.0)
+        success = response.json().get("ok", False)
+        if not success:
+            print(f"[telegram] Bot-Kommandos konnten nicht gesetzt werden: HTTP {response.status_code}")
+        return success
+    except Exception as error:
+        print(f"[telegram] Bot-Kommandos setzen fehlgeschlagen: {type(error).__name__}")
+        return False
+
+
 def answer_callback_query(callback_query_id: str, text: str) -> bool:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:

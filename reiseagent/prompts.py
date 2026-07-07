@@ -102,17 +102,22 @@ ESTIMATE_COSTS = (
 
 INTERPRET_BANK_CHECKIN = (
     "Du bist ein Finanz-Assistent. Lies die folgende Nachricht eines Nutzers und "
-    "erkenne sein monatliches Einkommen und seine festen monatlichen Ausgaben in Euro.\n\n"
+    "erkenne sein monatliches Einkommen, seine festen monatlichen Ausgaben und optional "
+    "eine gewuenschte Reise-Ruecklage in Euro.\n\n"
     "Nachricht: \"{text}\"\n\n"
     "Regeln:\n"
     "- income = monatliches Einkommen/Verdienst.\n"
     "- fixed_costs = feste monatliche Ausgaben (Miete, Fixkosten).\n"
+    "- travel_reserve = nur setzen, wenn der Nutzer explizit eine Reise-Ruecklage oder "
+    "ein Reisebudget nennt, sonst null.\n"
     "- Nur Zahlen als Werte, keine Waehrungssymbole oder Text.\n"
     "- Kannst du income oder fixed_costs nicht eindeutig erkennen, setze success auf false.\n\n"
     "Antworte NUR als JSON ohne Markdown-Backticks, z.B.:\n"
-    '{{"success": true, "income": 3000.0, "fixed_costs": 2000.0}}\n'
+    '{{"success": true, "income": 3000.0, "fixed_costs": 2000.0, "travel_reserve": null}}\n'
+    "oder mit Reise-Ruecklage:\n"
+    '{{"success": true, "income": 1000.0, "fixed_costs": 500.0, "travel_reserve": 150.0}}\n'
     "oder bei Unklarheit:\n"
-    '{{"success": false, "income": null, "fixed_costs": null}}'
+    '{{"success": false, "income": null, "fixed_costs": null, "travel_reserve": null}}'
 )
 
 INTERPRET_TRIP_FEEDBACK = (

@@ -31,6 +31,7 @@ from providers.telegram import (
     get_message_updates,
     answer_callback_query,
     send_suggestion_proposal,
+    set_bot_commands,
 )
 import scheduler
 from providers.calendar import create_calendar_event, sync_full_plan_to_calendar
@@ -124,6 +125,14 @@ def start_background_threads():
         scheduler_thread = threading.Thread(target=scheduler.scheduler_loop, daemon=True)
         scheduler_thread.start()
         print("[scheduler] Wöchentlicher Vorschlags-Scheduler gestartet (läuft samstags).")
+
+    try:
+        if set_bot_commands():
+            print("[telegram] Bot-Kommandos gesetzt (/bank, /bank_status, /bank_reset).")
+        else:
+            print("[telegram] Bot-Kommandos nicht gesetzt (kein Token oder Telegram nicht erreichbar).")
+    except Exception as exc:
+        print(f"[telegram] Bot-Kommandos setzen fehlgeschlagen: {exc}")
 
 
 class TripRequestBody(BaseModel):
@@ -748,6 +757,133 @@ def _route_pending_prompt_message(message: dict) -> None:
     profile_store.resolve_pending_prompt(prompt["id"])
 
 
+# ─────────────────────── Telegram Bankkonto-Kommandos ─────────────────────
+# Additiv zur bestehenden pending_prompt-Logik: erlaubt /bank, /bank_status,
+# /bank_reset auch OHNE offene Frage, sowie eindeutige spontane
+# Bankkonto-Nachrichten (bank_agent.is_spontaneous_bank_message).
+
+BANK_STATUS_COMMANDS = {"/bank_status", "/konto_status"}
+BANK_RESET_COMMANDS = {"/bank_reset", "/konto_reset"}
+
+
+def _first_word(text: str) -> str:
+    stripped = (text or "").strip()
+    if not stripped:
+        return ""
+    return stripped.split(maxsplit=1)[0].lower()
+
+
+def _handle_bank_status_command() -> None:
+    account = profile_store.get_current_bank_account()
+    if not account:
+        send_message("Noch keine Bankkonto-Daten gespeichert.")
+        return
+    send_message(
+        f"Simuliertes Bankkonto ({account['month']}):\n"
+        f"Einnahmen: {account['income']:.0f} €\n"
+        f"Fixkosten: {account['fixed_costs']:.0f} €\n"
+        f"Freier Betrag: {account['free_amount']:.0f} €\n"
+        f"Reise-Rücklage: {account['travel_reserve']:.0f} €\n"
+        f"Aktueller Kontostand: {account['current_balance']:.0f} €"
+    )
+
+
+def _handle_bank_reset_command() -> None:
+    profile_store.reset_bank_account_for_demo()
+    send_message("Simuliertes Bankkonto wurde für die Demo zurückgesetzt.")
+
+
+def _handle_bank_open_question_command() -> None:
+    if profile_store.get_open_pending_prompt():
+        send_message("Es ist bereits eine Frage offen. Bitte beantworte diese zuerst.")
+        return
+
+    profile_store.create_pending_prompt("bank_checkin", metadata={"source": "manual_command"})
+    send_message(
+        "Okay, ich aktualisiere dein simuliertes Bankkonto.\n"
+        "Bitte antworte mit deinen Zahlen, z. B.:\n\n"
+        "Einnahmen: 603, Fixkosten: 500\n\n"
+        "Optional mit eigener Reise-Rücklage:\n\n"
+        "Einnahmen: 603, Fixkosten: 500, Reiserücklage: 50\n\n"
+        "Du kannst auch nur Zahlen schicken, z. B.:\n"
+        "603 500"
+    )
+
+
+def _handle_spontaneous_bank_message(text: str) -> None:
+    """Speichert eine eindeutige Bankkonto-Nachricht direkt, ohne vorher eine
+    pending_prompt-Frage zu oeffnen (z.B. '/bank Einnahmen 1000, Fixkosten 500')."""
+    result = bank_agent.interpret_bank_checkin(text)
+
+    if not result.get("success"):
+        send_message(
+            "Ich konnte die Bankdaten nicht eindeutig erkennen. "
+            "Bitte schreibe z. B.: /bank Einnahmen 1000, Fixkosten 500."
+        )
+        print(f"[bank] Spontane Nachricht unklar: '{text}'")
+        return
+
+    month = datetime.now().strftime("%Y-%m")
+    saved = profile_store.save_bank_checkin(
+        month,
+        result["income"],
+        result["fixed_costs"],
+        travel_reserve=result["travel_reserve"],
+    )
+    send_message(
+        f"Bankkonto aktualisiert. Freier Betrag: {saved['free_amount']:.0f} €, "
+        f"Reise-Rücklage: {saved['travel_reserve']:.0f} €."
+    )
+    print(f"[bank] Spontane Nachricht gespeichert: {saved}")
+
+
+def _route_incoming_telegram_message(message: dict) -> None:
+    """
+    Erster Anlaufpunkt fuer jede eingehende Telegram-Freitextnachricht.
+
+    Reihenfolge (wichtig fuer Eindeutigkeit):
+      1. Feste Bankkonto-Kommandos (/bank_status, /bank_reset, ...) - immer
+         direkt verarbeitet, unabhaengig von offenen Fragen.
+      2. Ist eine pending_prompt-Frage offen: /bank erneut -> freundlicher
+         Hinweis statt als unklare Antwort gezaehlt zu werden. Sonst
+         unveraendert an die bestehende _route_pending_prompt_message.
+      3. Keine offene Frage + alleinstehendes /bank|/konto|/budget -> oeffnet
+         eine gefuehrte Bankkonto-Frage (noch kein Speichern).
+      4. Keine offene Frage + eindeutige spontane Bankkonto-Nachricht ->
+         direkt speichern.
+      5. Alles andere: unveraendertes Verhalten (keine Aktion, wie bisher).
+    """
+    profile_store.init_db()
+    text = message.get("text", "")
+    first_word = _first_word(text)
+
+    if first_word in BANK_STATUS_COMMANDS:
+        _handle_bank_status_command()
+        return
+
+    if first_word in BANK_RESET_COMMANDS:
+        _handle_bank_reset_command()
+        return
+
+    if profile_store.get_open_pending_prompt():
+        if bank_agent.is_bare_bank_command(text):
+            send_message("Es ist bereits eine Frage offen. Bitte beantworte diese zuerst.")
+            return
+        _route_pending_prompt_message(message)
+        return
+
+    if bank_agent.is_bare_bank_command(text):
+        _handle_bank_open_question_command()
+        return
+
+    if bank_agent.is_spontaneous_bank_message(text):
+        _handle_spontaneous_bank_message(text)
+        return
+
+    # Kein Bankkonto-Kommando, keine spontane Bankkonto-Nachricht, keine offene
+    # Frage -> keine Aktion, bestehendes Verhalten bleibt unveraendert.
+
+
 def _telegram_callback_loop():
     global _telegram_update_offset
 
@@ -815,7 +951,7 @@ def _telegram_callback_loop():
                 update_id = text_message["update_id"]
                 if highest_seen_update_id is None or update_id > highest_seen_update_id:
                     highest_seen_update_id = update_id
-                _route_pending_prompt_message(text_message)
+                _route_incoming_telegram_message(text_message)
 
             if highest_seen_update_id is not None:
                 _telegram_update_offset = highest_seen_update_id + 1
