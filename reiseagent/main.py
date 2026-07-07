@@ -27,6 +27,7 @@ from providers.telegram import (
     send_navigation_reminder,
     send_plan_update,
     get_callback_updates,
+    get_message_updates,
     answer_callback_query,
     send_suggestion_proposal,
 )
@@ -463,6 +464,33 @@ def run_scheduler_now():
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
 
+
+class PendingPromptTestBody(BaseModel):
+    prompt_type: str = "feedback"
+    trip_id: Optional[str] = None
+
+
+@app.post("/api/pending-prompts/test")
+def create_test_pending_prompt(body: PendingPromptTestBody):
+    """
+    Manueller Test-Endpunkt (für Tests, kein echter Seiteneffekt/Telegram-Versand):
+    legt testweise eine offene pending_prompt-Frage an und zeigt alle aktuell
+    offenen Fragen. Existiert bereits eine offene Frage, wird keine zweite
+    erzeugt (siehe profile_store.create_pending_prompt).
+    """
+    profile_store.init_db()
+    prompt_id = profile_store.create_pending_prompt(body.prompt_type, trip_id=body.trip_id)
+    return {
+        "pending_prompt_id": prompt_id,
+        "open_pending_prompts": profile_store.list_open_pending_prompts(),
+    }
+
+
+@app.get("/api/pending-prompts")
+def list_pending_prompts():
+    profile_store.init_db()
+    return {"open_pending_prompts": profile_store.list_open_pending_prompts()}
+
 _telegram_update_offset = None
 
 
@@ -566,15 +594,63 @@ def _handle_telegram_suggestion_decision(action: str, callback_data: dict) -> st
     return "Unbekannte Aktion."
 
 
+def _handle_bank_checkin_reply(prompt: dict, message: dict) -> None:
+    """Platzhalter: Bankkonto-Check-in-Agent wird in einem spaeteren Schritt gebaut."""
+    print(
+        "[pending_prompt] bank_checkin-Antwort erhalten (Stub, noch nicht ausgewertet): "
+        f"prompt_id={prompt['id']} text='{message.get('text')}'"
+    )
+
+
+def _handle_feedback_reply(prompt: dict, message: dict) -> None:
+    """Platzhalter: Feedback-Agent wird in einem spaeteren Schritt gebaut."""
+    print(
+        "[pending_prompt] feedback-Antwort erhalten (Stub, noch nicht ausgewertet): "
+        f"prompt_id={prompt['id']} text='{message.get('text')}'"
+    )
+
+
+def _route_pending_prompt_message(message: dict) -> None:
+    """
+    Ordnet eine Telegram-Freitextnachricht einer offenen pending_prompts-Frage zu.
+
+    Gibt es keine offene Frage, passiert nichts - bestehendes Verhalten
+    (generische Profil-/Message-Pipeline) bleibt unveraendert, die Nachricht
+    wird hier nicht fälschlich als Bankkonto/Feedback interpretiert.
+    """
+    prompt = profile_store.get_open_pending_prompt()
+    if not prompt:
+        return
+
+    prompt_type = prompt.get("type")
+    if prompt_type == "bank_checkin":
+        _handle_bank_checkin_reply(prompt, message)
+    elif prompt_type == "feedback":
+        _handle_feedback_reply(prompt, message)
+    else:
+        print(f"[pending_prompt] Unbekannter Prompt-Typ '{prompt_type}' - keine Aktion.")
+
+    profile_store.resolve_pending_prompt(prompt["id"])
+
+
 def _telegram_callback_loop():
     global _telegram_update_offset
 
     while True:
         try:
-            updates = get_callback_updates(offset=_telegram_update_offset)
+            # Beide Abfragen starten bewusst vom selben (noch nicht vorgerueckten)
+            # Offset, damit keine Nachricht uebersprungen wird, nur weil der
+            # Callback-Teil seinen Offset zuerst weiterschiebt. Vorgerueckt wird
+            # erst am Ende, auf den hoechsten tatsaechlich gesehenen update_id.
+            current_offset = _telegram_update_offset
+            highest_seen_update_id = None
+
+            updates = get_callback_updates(offset=current_offset)
 
             for update in updates.get("result", []):
-                _telegram_update_offset = update["update_id"] + 1
+                update_id = update["update_id"]
+                if highest_seen_update_id is None or update_id > highest_seen_update_id:
+                    highest_seen_update_id = update_id
 
                 callback = update.get("callback_query")
                 if not callback:
@@ -615,6 +691,19 @@ def _telegram_callback_loop():
 
                 if callback_id:
                     answer_callback_query(callback_id, message)
+
+            # --- Freitext-Nachrichten (neu, additiv) ---
+            # Nur relevant fuer Nachrichten, die eine offene pending_prompts-Frage
+            # beantworten. Ohne offene Frage passiert hier nichts.
+            text_messages = get_message_updates(offset=current_offset)
+            for text_message in text_messages:
+                update_id = text_message["update_id"]
+                if highest_seen_update_id is None or update_id > highest_seen_update_id:
+                    highest_seen_update_id = update_id
+                _route_pending_prompt_message(text_message)
+
+            if highest_seen_update_id is not None:
+                _telegram_update_offset = highest_seen_update_id + 1
 
         except Exception as exc:
             print(f"[telegram_callback] Fehler: {exc}")

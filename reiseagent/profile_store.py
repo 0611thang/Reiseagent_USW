@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "profile.db")
 
@@ -50,6 +51,16 @@ def init_db():
             embedding BLOB,
             saved_at TEXT DEFAULT (datetime('now')),
             UNIQUE(source, date, text)
+        );
+        CREATE TABLE IF NOT EXISTS pending_prompts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            trip_id TEXT,
+            created_at TEXT NOT NULL,
+            resolved INTEGER DEFAULT 0,
+            resolved_at TEXT,
+            source TEXT DEFAULT 'telegram',
+            metadata_json TEXT
         );
     """)
     conn.commit()
@@ -155,3 +166,79 @@ def update_pending_suggestions_status(status):
     conn.execute("UPDATE suggestions SET status=? WHERE status='pending'", (status,))
     conn.commit()
     conn.close()
+
+
+def create_pending_prompt(prompt_type, trip_id=None, metadata=None):
+    """Legt eine neue offene Telegram-Frage an und gibt ihre id zurueck.
+
+    MVP-Regel: es soll immer nur eine offene (unresolved) Frage gleichzeitig
+    geben. Existiert bereits eine offene Frage, wird KEINE zweite erzeugt,
+    sondern die id der bestehenden offenen Frage zurueckgegeben.
+    """
+    existing = get_open_pending_prompt()
+    if existing:
+        return existing["id"]
+
+    metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
+    created_at = datetime.now().isoformat(timespec="seconds")
+
+    conn = _get_conn()
+    cursor = conn.execute(
+        "INSERT INTO pending_prompts (type, trip_id, created_at, metadata_json) VALUES (?,?,?,?)",
+        (prompt_type, trip_id, created_at, metadata_json),
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_open_pending_prompt(prompt_type=None):
+    """Gibt die aelteste offene (unresolved) Frage zurueck, oder None.
+
+    Wenn prompt_type gesetzt ist, wird nur nach diesem Typ gefiltert.
+    """
+    conn = _get_conn()
+    if prompt_type:
+        row = conn.execute(
+            "SELECT * FROM pending_prompts WHERE resolved=0 AND type=? ORDER BY created_at ASC, id ASC LIMIT 1",
+            (prompt_type,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM pending_prompts WHERE resolved=0 ORDER BY created_at ASC, id ASC LIMIT 1"
+        ).fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    result = dict(row)
+    result["metadata"] = json.loads(result["metadata_json"]) if result.get("metadata_json") else None
+    return result
+
+
+def resolve_pending_prompt(prompt_id):
+    """Markiert eine Frage als erledigt. Unbekannte ids werden ignoriert (kein Crash)."""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE pending_prompts SET resolved=1, resolved_at=? WHERE id=?",
+        (datetime.now().isoformat(timespec="seconds"), prompt_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_open_pending_prompts():
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM pending_prompts WHERE resolved=0 ORDER BY created_at ASC, id ASC"
+    ).fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        d = dict(row)
+        d["metadata"] = json.loads(d["metadata_json"]) if d.get("metadata_json") else None
+        results.append(d)
+    return results

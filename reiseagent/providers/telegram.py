@@ -319,6 +319,63 @@ def get_callback_updates(offset: int = None) -> dict:
         }
 
 
+def get_message_updates(offset: int = None, timeout: int = 0) -> list:
+    """
+    Holt neue Telegram-Freitextnachrichten (kein Button-Klick).
+
+    Additiv zu get_callback_updates(): nutzt denselben getUpdates-Endpunkt,
+    filtert aber auf allowed_updates=["message"] und gibt eine einfache Liste
+    von {update_id, message_id, chat_id, text, date, from_user} zurueck
+    (statt der rohen Telegram-Antwort wie bei get_callback_updates).
+
+    Fail-safe: gibt bei fehlendem Bot-Token oder Fehlern [] zurueck, kein Crash.
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return []
+
+    params = {
+        "timeout": timeout,
+        "allowed_updates": ["message"],
+    }
+
+    if offset is not None:
+        params["offset"] = offset
+
+    try:
+        url = f"https://api.telegram.org/bot{token}/getUpdates"
+        response = httpx.get(url, params=params, timeout=timeout + 10.0)
+        data = response.json()
+
+        if not data.get("ok", False):
+            print(f"[telegram] Message-Abfrage abgelehnt: HTTP {response.status_code}")
+            return []
+
+        messages = []
+        for update in data.get("result", []):
+            msg = update.get("message")
+            if not msg:
+                continue
+            text = msg.get("text")
+            if not text:
+                continue  # nur Textnachrichten beruecksichtigen (keine Fotos, Sticker, etc.)
+
+            from_user = msg.get("from", {}) or {}
+            messages.append({
+                "update_id": update.get("update_id"),
+                "message_id": msg.get("message_id"),
+                "chat_id": (msg.get("chat", {}) or {}).get("id"),
+                "text": text,
+                "date": msg.get("date"),
+                "from_user": from_user.get("username") or from_user.get("first_name"),
+            })
+        return messages
+
+    except Exception as error:
+        print(f"[telegram] Message-Abfrage fehlgeschlagen: {type(error).__name__}")
+        return []
+
+
 def answer_callback_query(callback_query_id: str, text: str) -> bool:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
