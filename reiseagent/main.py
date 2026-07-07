@@ -32,6 +32,7 @@ from providers.telegram import (
     answer_callback_query,
     send_suggestion_proposal,
     set_bot_commands,
+    normalize_telegram_command_text,
 )
 import scheduler
 from providers.calendar import create_calendar_event, sync_full_plan_to_calendar
@@ -852,9 +853,18 @@ def _route_incoming_telegram_message(message: dict) -> None:
       4. Keine offene Frage + eindeutige spontane Bankkonto-Nachricht ->
          direkt speichern.
       5. Alles andere: unveraendertes Verhalten (keine Aktion, wie bisher).
+
+    Telegram haengt in Gruppen an angeklickte Bot-Befehle automatisch den
+    Bot-Namen an (z.B. "/bank@USW_ReiseplanerBot"). Der Text wird deshalb
+    zuerst normalisiert (normalize_telegram_command_text) und diese
+    normalisierte Fassung ueberall unten verwendet - auch beim Weiterreichen
+    an die bestehende pending_prompt-Antwortlogik ("603 500" bleibt davon
+    unberuehrt, da dort kein fuehrendes Slash-Kommando vorkommt).
     """
     profile_store.init_db()
-    text = message.get("text", "")
+    text = normalize_telegram_command_text(message.get("text", ""))
+    if text != message.get("text", ""):
+        message = {**message, "text": text}
     first_word = _first_word(text)
 
     if first_word in BANK_STATUS_COMMANDS:

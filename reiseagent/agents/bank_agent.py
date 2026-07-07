@@ -4,6 +4,7 @@ import re
 import llm
 import prompts
 import profile_store
+from providers.telegram import normalize_telegram_command_text
 
 # Alleinstehende /bank /konto /budget Kommandos (mit Wortgrenze, damit
 # "/bank_status" NICHT als "/bank" erkannt wird).
@@ -30,10 +31,14 @@ def is_bare_bank_command(text: str) -> bool:
     True NUR bei einem alleinstehenden /bank, /konto oder /budget ohne weitere
     Daten danach (z.B. '/bank' oder '/bank ' oder '/bank!').
     Das oeffnet die gefuehrte Eingabe statt sofort zu speichern.
+
+    Normalisiert vorher einen Telegram-Bot-Mention-Suffix (z.B. aus
+    "/bank@USW_ReiseplanerBot" wird "/bank"), damit angeklickte Bot-Befehle
+    in Gruppen korrekt als alleinstehendes Kommando erkannt werden.
     """
     if not text:
         return False
-    stripped = text.strip()
+    stripped = normalize_telegram_command_text(text.strip())
     match = _BANK_COMMAND_PATTERN.match(stripped)
     if not match:
         return False
@@ -48,10 +53,12 @@ def is_spontaneous_bank_message(text: str) -> bool:
     aggressiv: im Zweifel False, damit normale Chatnachrichten oder
     Reise-Feedback (z.B. "Essen 3/5", "Ich habe 500 Euro ausgegeben")
     niemals faelschlich als Bankkonto interpretiert werden.
+
+    Normalisiert vorher einen Telegram-Bot-Mention-Suffix (siehe is_bare_bank_command).
     """
     if not text:
         return False
-    stripped = text.strip()
+    stripped = normalize_telegram_command_text(text.strip())
     if not stripped:
         return False
 
@@ -187,13 +194,14 @@ def interpret_bank_checkin(text: str) -> dict:
     Ist kein GROQ_API_KEY gesetzt oder die Antwort nicht sauber als JSON
     parsebar, greift ein einfacher Regex-Fallback (erste Zahl = income,
     zweite Zahl = fixed_costs, optionale dritte Zahl/Schluesselwort = travel_reserve).
-    Ein fuehrendes /bank /konto /budget wird vor der Erkennung entfernt.
+    Ein fuehrendes /bank /konto /budget (auch mit Telegram-Bot-Mention wie
+    "/bank@USW_ReiseplanerBot") wird vor der Erkennung entfernt.
     Wirft nie eine Exception nach aussen.
     """
     if not text or not text.strip():
         return _empty_result()
 
-    text = _strip_command_prefix(text.strip())
+    text = _strip_command_prefix(normalize_telegram_command_text(text.strip()))
     if not text:
         return _empty_result()
 

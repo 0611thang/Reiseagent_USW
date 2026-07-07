@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 import httpx
 from datetime import datetime, timedelta
@@ -6,6 +7,28 @@ from datetime import datetime, timedelta
 import store
 
 DEFAULT_CHAT_ID = "-1003734288144"  # Bisherige Reiseplaner-Gruppe
+
+# Telegram haengt in Gruppen automatisch "@BotName" an ein angeklicktes
+# Bot-Kommando an (z.B. "/bank@USW_ReiseplanerBot"). Nur der Kommando-Teil
+# am Textanfang wird erkannt/entfernt.
+_BOT_MENTION_PATTERN = re.compile(r"^(/[A-Za-z0-9_]+)@[A-Za-z0-9_]+", re.IGNORECASE)
+
+
+def normalize_telegram_command_text(text: str) -> str:
+    """
+    Entfernt einen Bot-Mention-Suffix direkt nach einem fuehrenden Slash-Kommando.
+
+    "/bank@USW_ReiseplanerBot" -> "/bank"
+    "/bank@USW_ReiseplanerBot Einnahmen 603, Fixkosten 500" -> "/bank Einnahmen 603, Fixkosten 500"
+    "Bankkonto: Einnahmen 1000, Fixkosten 500" -> unveraendert (kein fuehrendes Slash-Kommando)
+    "Museen 5/5, Essen 3/5" -> unveraendert
+
+    Veraendert nur den Kommando-Teil am Textanfang, alles danach bleibt unangetastet.
+    Faellt bei leerem/fehlendem Text einfach auf den Originalwert zurueck.
+    """
+    if not text:
+        return text
+    return _BOT_MENTION_PATTERN.sub(r"\1", text, count=1)
 
 
 def _get_chat_id():
