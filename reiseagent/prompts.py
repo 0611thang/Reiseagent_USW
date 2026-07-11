@@ -140,6 +140,23 @@ INTERPRET_TRIP_FEEDBACK = (
     '{{"feedback": [{{"category": "culture", "rating": 5, "comment": "Museen waren super"}}, ...]}}'
 )
 
+CURATE_PLACES = (
+    "Du bist ein Reiseführer-Experte für {destination}. Hier ist eine rohe, ungefilterte Liste "
+    "von Orten aus einer Kartendatenbank (OpenTripMap). Viele Einträge sind kein echtes Reiseziel: "
+    "Straßen, Parkplätze, Hausfassaden, Gedenktafeln, Denkmäler, Bürogebäude, Wohnhäuser, Friedhöfe, "
+    "Einträge ohne erkennbaren Namen.\n\n"
+    "Interessen des Nutzers: {interests}\n\n"
+    "Rohe Orte (id | name | kategorie):\n"
+    "{candidates}\n\n"
+    "Aufgabe:\n"
+    "- Entferne alle Einträge, die kein echtes Reiseziel für einen Touristen sind.\n"
+    "- Führe doppelte/sehr ähnliche Orte (gleicher Ort, ähnlicher Name) zusammen, behalte nur einen davon.\n"
+    "- Sortiere die verbleibenden Orte nach Qualität/Relevanz, beste zuerst.\n"
+    "- Maximal 5 Orte pro Kategorie, insgesamt maximal 40 Orte.\n\n"
+    "Antworte NUR als JSON ohne Markdown-Backticks, nur die ids in der sortierten Reihenfolge:\n"
+    '{{"ids": ["id1", "id2", "id3", ...]}}'
+)
+
 ORCHESTRATOR = (
     "Du bist der Reise-Koordinator. Wähle genau ein Tool für die Anfrage des Nutzers aus. "
     "Nutze 'answer_question' wenn keine andere Aktion passt."

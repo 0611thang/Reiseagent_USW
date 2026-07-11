@@ -1,10 +1,13 @@
 import os
+import json
 import math
 import difflib
 import unicodedata
 
 import httpx
 
+import llm
+import prompts
 from providers.geocoding import get_coordinates
 
 LAST_PLACES_STATUS = "not_loaded"
@@ -247,6 +250,39 @@ def _place_to_activity(place: dict, destination: str, interests: list) -> dict |
         "source": "opentripmap",
     }
 
+def _place_to_activity_raw(place: dict, destination: str, interests: list) -> dict | None:
+    # Wie _place_to_activity, aber ohne Bad-Place-Filter und ohne Quality-Score —
+    # die inhaltliche Bewertung (schlechte Namen raus, Duplikate zusammenfassen,
+    # sortieren) übernimmt das LLM in _curate_with_llm(). Nur die reine
+    # Interessen-Kategorie-Regel bleibt, weil das eine feste Businessregel ist.
+    name = _get_place_name(place).strip() or "(kein Name)"
+    kinds_text = _get_place_kinds(place)
+
+    category = _map_kind(kinds_text)
+    if not _category_allowed_by_interests(category, interests):
+        return None
+
+    lat, lng = _get_place_coordinates(place)
+
+    return {
+        "id": f"otm-{place.get('xid') or place.get('id') or name}",
+        "name": name,
+        "category": category,
+        "description": f"{name} in {destination}.",
+        "location": {
+            "name": name,
+            "area": destination,
+            "lat": lat,
+            "lng": lng,
+        },
+        "estimated_cost_per_person": _estimate_cost(category),
+        "duration_minutes": 90,
+        "indoor_outdoor": _guess_indoor_outdoor(kinds_text),
+        "tags": _extract_tags(kinds_text, interests),
+        "reasoning": f"Empfehlung via OpenTripMap fuer {destination}.",
+        "source": "opentripmap",
+    }
+
 def _get_place_name(place: dict) -> str:
     if place.get("name"):
         return place["name"]
@@ -453,6 +489,113 @@ def _extract_tags(kinds_str: str, interests: list) -> list:
         tags += ["sehenswuerdigkeiten", "geschichte"]
     return list(set(tags))
 
+def _fetch_raw_places(destination: str, interests: list) -> list:
+    # Holt Orte roh von OpenTripMap, ohne Filterung/Score/Dedup, für den
+    # LLM-Kurationspfad. Gleiche API-Abfrage-Logik wie _fetch_from_opentripmap,
+    # aber ohne den Python-Vorfilter, damit das LLM alle Kandidaten selbst beurteilt.
+    api_key = os.getenv("OPENTRIPMAP_API_KEY", "")
+    if not api_key:
+        return []
+
+    coords = get_coordinates(destination)
+    if not coords:
+        return []
+
+    try:
+        url = "https://api.opentripmap.com/0.1/en/places/radius"
+        raw_activities = []
+
+        for radius in [8000, 15000, 25000]:
+            for kinds in _build_opentripmap_kinds(interests):
+                params = {
+                    "radius": radius,
+                    "lon": coords["lng"],
+                    "lat": coords["lat"],
+                    "kinds": kinds,
+                    "limit": 25,
+                    "format": "json",
+                    "rate": 2,
+                    "apikey": api_key,
+                }
+                response = httpx.get(url, params=params, timeout=8.0)
+                if response.status_code != 200:
+                    continue
+
+                places = response.json()
+                if not isinstance(places, list):
+                    continue
+
+                for place in places:
+                    activity = _place_to_activity_raw(place, destination, interests)
+                    if activity:
+                        raw_activities.append(activity)
+
+            if len(raw_activities) >= 40:
+                break
+
+        return raw_activities
+    except Exception:
+        return []
+
+def _build_candidates_text(raw_activities: list) -> str:
+    lines = []
+    for a in raw_activities:
+        lines.append(f"- id={a['id']} | {a['name']} | {a['category']}")
+    return "\n".join(lines)
+
+def _curate_with_llm(raw_activities: list, destination: str, interests: list) -> list | None:
+    # Lässt das LLM die rohe Ortsliste filtern, Duplikate zusammenführen und
+    # sortieren. Gibt None zurück, wenn kein API-Key vorhanden ist oder keine
+    # gültige Antwort kommt — der Aufrufer nutzt dann den alten deterministischen
+    # Filter als Fallback.
+    if not raw_activities:
+        return None
+
+    prompt = prompts.fill(
+        prompts.CURATE_PLACES,
+        destination=destination,
+        interests=", ".join(interests) if interests else "keine Angabe",
+        candidates=_build_candidates_text(raw_activities),
+    )
+
+    raw = llm.call("places_curation_agent", prompt, prompt_id="CURATE_PLACES", max_tokens=1500)
+    if not raw:
+        return None
+
+    try:
+        data = json.loads(raw.strip())
+        ids = data.get("ids", [])
+    except Exception:
+        return None
+
+    if not ids:
+        return None
+
+    by_id = {a["id"]: a for a in raw_activities}
+    curated = []
+    for rank, place_id in enumerate(ids):
+        activity = by_id.get(place_id)
+        if not activity:
+            continue
+        activity = activity.copy()
+        # Absteigender Score statt des alten regelbasierten Quality-Scores — die
+        # LLM-Reihenfolge selbst ist die Bewertung, quality_score bleibt als Feld
+        # bestehen, weil agents/recommendation.py es als Signal nutzt.
+        activity["quality_score"] = max(10, 95 - rank * 2)
+        curated.append(activity)
+
+    return curated or None
+
 def get_places(destination: str, interests: list) -> list:
     global LAST_PLACES_STATUS
+
+    raw_activities = _fetch_raw_places(destination, interests)
+    curated = _curate_with_llm(raw_activities, destination, interests)
+
+    if curated:
+        LAST_PLACES_STATUS = f"LLM hat {len(curated)} Orte aus {len(raw_activities)} Rohtreffern kuratiert."
+        return curated
+
+    # Fallback: kein GROQ_API_KEY, LLM-Fehler oder keine gültige Antwort ->
+    # alter deterministischer Filter (unverändert, siehe _fetch_from_opentripmap)
     return _fetch_from_opentripmap(destination, interests)
