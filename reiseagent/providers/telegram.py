@@ -414,6 +414,7 @@ def set_bot_commands() -> bool:
     commands = [
         {"command": "bank", "description": "Bankkonto eintragen oder aktualisieren"},
         {"command": "bank_status", "description": "Bankkonto anzeigen"},
+        {"command": "feedback", "description": "Reisefeedback anzeigen"},
         {"command": "bank_reset", "description": "Demo-Bankkonto zurücksetzen"},
     ]
 

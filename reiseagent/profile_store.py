@@ -494,6 +494,64 @@ def get_trip_feedback(trip_id=None):
     return [dict(row) for row in rows]
 
 
+def get_feedback_summary(destination: str | None = None) -> list[dict]:
+    """
+    Fasst gespeichertes Reise-Feedback pro Reiseziel zusammen.
+
+    destination:
+    - None: alle Reiseziele auswerten
+    - Text: genau dieses Reiseziel suchen, ohne Gross-/Kleinschreibung
+
+    Gibt [] zurueck, wenn keine passenden Feedbackdaten vorhanden sind.
+    """
+    query = """
+        SELECT
+            MIN(TRIM(destination)) AS destination,
+            ROUND(AVG(rating), 2) AS overall_average,
+            COUNT(*) AS total_count,
+            ROUND(AVG(CASE WHEN category = 'culture' THEN rating END), 2) AS culture,
+            ROUND(AVG(CASE WHEN category = 'food' THEN rating END), 2) AS food,
+            ROUND(AVG(CASE WHEN category = 'nature' THEN rating END), 2) AS nature,
+            ROUND(AVG(CASE WHEN category = 'sightseeing' THEN rating END), 2) AS sightseeing,
+            ROUND(AVG(CASE WHEN category = 'shopping' THEN rating END), 2) AS shopping,
+            MAX(feedback_date) AS latest_feedback_date
+        FROM trip_feedback
+        WHERE destination IS NOT NULL
+          AND TRIM(destination) != ''
+    """
+    params = []
+
+    if destination:
+        query += " AND LOWER(TRIM(destination)) = LOWER(TRIM(?))"
+        params.append(destination)
+
+    query += """
+        GROUP BY LOWER(TRIM(destination))
+        ORDER BY LOWER(TRIM(destination))
+    """
+
+    conn = _get_conn()
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        results.append({
+            "destination": row["destination"],
+            "overall_average": row["overall_average"],
+            "total_count": row["total_count"],
+            "category_averages": {
+                "culture": row["culture"],
+                "food": row["food"],
+                "nature": row["nature"],
+                "sightseeing": row["sightseeing"],
+                "shopping": row["shopping"],
+            },
+            "latest_feedback_date": row["latest_feedback_date"],
+        })
+    return results
+
+
 def has_trip_feedback(trip_id):
     if not trip_id:
         return False

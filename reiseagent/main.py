@@ -3,6 +3,7 @@ import threading
 import time
 import sys
 import os
+import re
 sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
@@ -129,7 +130,7 @@ def start_background_threads():
 
     try:
         if set_bot_commands():
-            print("[telegram] Bot-Kommandos gesetzt (/bank, /bank_status, /bank_reset).")
+            print("[telegram] Bot-Kommandos gesetzt (/bank, /bank_status, /bank_reset, /feedback).")
         else:
             print("[telegram] Bot-Kommandos nicht gesetzt (kein Token oder Telegram nicht erreichbar).")
     except Exception as exc:
@@ -762,6 +763,15 @@ def _route_pending_prompt_message(message: dict) -> None:
 
 BANK_STATUS_COMMANDS = {"/bank_status", "/konto_status"}
 BANK_RESET_COMMANDS = {"/bank_reset", "/konto_reset"}
+FEEDBACK_COMMANDS = {"/feedback", "/bewertung", "/bewertungen", "/reise_feedback"}
+
+FEEDBACK_CATEGORY_LABELS = {
+    "culture": "Kultur",
+    "food": "Essen",
+    "nature": "Natur",
+    "sightseeing": "Sehenswürdigkeiten",
+    "shopping": "Shopping",
+}
 
 
 def _first_word(text: str) -> str:
@@ -769,6 +779,119 @@ def _first_word(text: str) -> str:
     if not stripped:
         return ""
     return stripped.split(maxsplit=1)[0].lower()
+
+
+def _format_rating(value) -> str:
+    if value is None:
+        return "noch nicht bewertet"
+    try:
+        return f"{float(value):.2f}".replace(".", ",") + " / 5"
+    except (TypeError, ValueError):
+        return "noch nicht bewertet"
+
+
+def _format_feedback_overview(summaries: list[dict]) -> str:
+    if not summaries:
+        return "Es ist noch kein Reisefeedback gespeichert."
+
+    lines = ["Gespeichertes Reisefeedback:", ""]
+    for item in summaries:
+        destination = item.get("destination") or "Unbekanntes Reiseziel"
+        rating = _format_rating(item.get("overall_average"))
+        count = item.get("total_count") or 0
+        label = "Bewertung" if count == 1 else "Bewertungen"
+        lines.append(f"{destination}: {rating} aus {count} {label}")
+
+    lines.extend(["", "Du kannst Details abfragen mit:", "/feedback Berlin"])
+    return "\n".join(lines)
+
+
+def _format_feedback_details(summary: dict, requested_destination: str) -> str:
+    if not summary:
+        destination = (requested_destination or "").strip() or "dieses Reiseziel"
+        return f"Für {destination} habe ich noch kein gespeichertes Feedback."
+
+    destination = summary.get("destination") or requested_destination
+    lines = [
+        f"Reisefeedback - {destination}",
+        "",
+        f"Gesamtbewertung: {_format_rating(summary.get('overall_average'))}",
+        f"Anzahl Bewertungen: {summary.get('total_count') or 0}",
+        "",
+    ]
+
+    category_averages = summary.get("category_averages") or {}
+    for key, label in FEEDBACK_CATEGORY_LABELS.items():
+        lines.append(f"{label}: {_format_rating(category_averages.get(key))}")
+
+    return "\n".join(lines)
+
+
+def _handle_feedback_summary_command(destination: str | None = None) -> None:
+    summaries = profile_store.get_feedback_summary(destination)
+    if destination:
+        summary = summaries[0] if summaries else None
+        send_message(_format_feedback_details(summary, destination))
+        return
+
+    send_message(_format_feedback_overview(summaries))
+
+
+def _extract_feedback_command_destination(text: str) -> str | None:
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+
+    parts = stripped.split(maxsplit=1)
+    if len(parts) == 1:
+        return None
+
+    destination = parts[1].strip(" :,-")
+    return destination or None
+
+
+def _contains_known_feedback_destination(text: str) -> str | None:
+    lower_text = (text or "").casefold()
+    if not lower_text:
+        return None
+
+    for summary in profile_store.get_feedback_summary():
+        destination = (summary.get("destination") or "").strip()
+        if not destination:
+            continue
+        pattern = r"(?<!\w)" + re.escape(destination.casefold()) + r"(?!\w)"
+        if re.search(pattern, lower_text):
+            return destination
+    return None
+
+
+def _extract_natural_feedback_destination(text: str) -> str | None:
+    """
+    Erkennt nur konservative Feedback-Abfragen fuer bereits bekannte Reiseziele.
+    Normale Planungsnachrichten wie "Ich will nach Berlin reisen" bleiben frei.
+    """
+    lower = (text or "").casefold()
+    if not lower:
+        return None
+
+    has_clear_intent = (
+        "wie war" in lower
+        or "feedback" in lower
+        or "bewertung" in lower
+        or "reisefeedback" in lower
+    )
+    cautious_reise_intent = (
+        re.search(r"\breise\b", lower) is not None
+        and (
+            lower.strip().startswith("wie ")
+            or "meine reise" in lower
+            or "mein reisefeedback" in lower
+        )
+    )
+    if not has_clear_intent and not cautious_reise_intent:
+        return None
+
+    return _contains_known_feedback_destination(text)
 
 
 def _format_bank_status_text(account: dict) -> str:
@@ -856,14 +979,18 @@ def _route_incoming_telegram_message(message: dict) -> None:
     Reihenfolge (wichtig fuer Eindeutigkeit):
       1. Feste Bankkonto-Kommandos (/bank_status, /bank_reset, ...) - immer
          direkt verarbeitet, unabhaengig von offenen Fragen.
-      2. Ist eine pending_prompt-Frage offen: /bank erneut -> freundlicher
+      2. Explizite Feedback-Kommandos (/feedback, /bewertung, ...) zeigen
+         gespeichertes Reisefeedback an.
+      3. Ist eine pending_prompt-Frage offen: /bank erneut -> freundlicher
          Hinweis statt als unklare Antwort gezaehlt zu werden. Sonst
          unveraendert an die bestehende _route_pending_prompt_message.
-      3. Keine offene Frage + alleinstehendes /bank|/konto|/budget -> oeffnet
+      4. Keine offene Frage + alleinstehendes /bank|/konto|/budget -> oeffnet
          eine gefuehrte Bankkonto-Frage (noch kein Speichern).
-      4. Keine offene Frage + eindeutige spontane Bankkonto-Nachricht ->
+      5. Keine offene Frage + eindeutige spontane Bankkonto-Nachricht ->
          direkt speichern.
-      5. Alles andere: unveraendertes Verhalten (keine Aktion, wie bisher).
+      6. Keine offene Frage + konservativ erkannte Feedback-Frage ->
+         gespeichertes Reisefeedback anzeigen.
+      7. Alles andere: unveraendertes Verhalten (keine Aktion, wie bisher).
 
     Telegram haengt in Gruppen an angeklickte Bot-Befehle automatisch den
     Bot-Namen an (z.B. "/bank@USW_ReiseplanerBot"). Der Text wird deshalb
@@ -886,6 +1013,10 @@ def _route_incoming_telegram_message(message: dict) -> None:
         _handle_bank_reset_command()
         return
 
+    if first_word in FEEDBACK_COMMANDS:
+        _handle_feedback_summary_command(_extract_feedback_command_destination(text))
+        return
+
     if profile_store.get_open_pending_prompt():
         if bank_agent.is_bare_bank_command(text):
             send_message("Es ist bereits eine Frage offen. Bitte beantworte diese zuerst.")
@@ -901,8 +1032,13 @@ def _route_incoming_telegram_message(message: dict) -> None:
         _handle_spontaneous_bank_message(text)
         return
 
-    # Kein Bankkonto-Kommando, keine spontane Bankkonto-Nachricht, keine offene
-    # Frage -> keine Aktion, bestehendes Verhalten bleibt unveraendert.
+    feedback_destination = _extract_natural_feedback_destination(text)
+    if feedback_destination:
+        _handle_feedback_summary_command(feedback_destination)
+        return
+
+    # Kein Bankkonto-/Feedback-Kommando, keine spontane Bankkonto-Nachricht,
+    # keine offene Frage -> keine Aktion, bestehendes Verhalten bleibt unveraendert.
 
 
 def _telegram_callback_loop():
