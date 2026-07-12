@@ -3,6 +3,280 @@
 Alle Änderungen am Projekt werden hier dokumentiert.  
 Sortierung: **neueste Einträge oben**.
 ---
+## [2026-07-12] Feature: Flight-Check über den LLM-Orchestrator
+
+**Status:** Mergerd  
+**Datum & Uhrzeit:** 2026-07-12  
+**Autor:** Suhaib
+
+### Ziel der Änderung
+
+Die bisherige Reaktion auf Flugverspätungen wurde überarbeitet. Zuvor wurden bei einer erkannten Verspätung alle Programmpunkte des ersten Reisetages pauschal um die Verspätungsdauer nach hinten verschoben. Dabei wurden inhaltliche Faktoren wie Öffnungszeiten, sinnvolle Tagesabläufe oder Budgetauswirkungen nicht berücksichtigt.
+
+Die Neuplanung erfolgt nun über denselben LLM-Orchestrator, der auch normale Änderungsanfragen aus dem Chat verarbeitet. Dadurch wird der erste Reisetag bei einer relevanten Flugverspätung inhaltlich neu bewertet, anstatt nur mechanisch verschoben zu werden.
+
+### Neue Funktionsweise
+
+Der Hintergrundprozess in `agents/monitoring.py` überwacht weiterhin regelmäßig den Flugstatus. Die bestehende Logik zur Bestimmung der Prüfintervalle über `required_interval_seconds()` wurde nicht verändert.
+
+Sobald eine Flugverspätung von mindestens 30 Minuten erkannt wird, erzeugt der Monitoring-Prozess eine synthetische Chat-Nachricht. Diese Nachricht enthält unter anderem:
+
+* die Flugnummer,
+* die erkannte Verspätung,
+* die geplante Ankunftszeit,
+* die erwartete Ankunftszeit,
+* die Aufforderung, den ersten Reisetag sinnvoll neu zu planen.
+
+Beispiel einer solchen Systemnachricht:
+
+> Systemmeldung: Flug LH123 hat 45 Minuten Verspätung. Die Verspätung wirkt sich auf den Ankunftszeitpunkt am ersten Reisetag aus. Bitte plane Tag 1 inhaltlich neu und prüfe dabei den bestehenden Tagesplan, sinnvolle Uhrzeiten, Öffnungszeiten und mögliche Budget-Auswirkungen.
+
+Diese Nachricht wird anschließend über `graph.run_chat()` an den normalen Orchestrator übergeben.
+
+### Nutzung des bestehenden `replan_day`-Pfades
+
+Der Orchestrator verarbeitet die synthetische Nachricht wie eine normale Chat-Anfrage und soll dafür das bestehende Tool `replan_day` auswählen.
+
+Der Orchestrator-Prompt in `prompts.py` wurde ergänzt, sodass bei gemeldeten Flugverspätungen mit Auswirkungen auf den Ankunftstag bevorzugt der `replan_day`-Pfad gewählt wird.
+
+Nach dem Graph-Aufruf wird zusätzlich geprüft, welches Tool der Orchestrator tatsächlich ausgewählt hat. Wird nicht `replan_day` gewählt, gilt der Orchestrator-Aufruf als fehlgeschlagen und die bestehende Fallback-Logik wird verwendet.
+
+### Proposal-Modus für systemseitige Neuplanungen
+
+`graph.run_chat()` wurde um einen Proposal-Modus erweitert:
+
+```python
+graph.run_chat(
+    trip,
+    message,
+    proposal_mode=True,
+    include_metadata=True,
+)
+```
+
+Der Parameter `proposal_mode=True` kennzeichnet eine systemseitig ausgelöste Neuplanung. In diesem Modus darf der Plan intern verändert werden, externe Nebenwirkungen werden jedoch zunächst unterdrückt.
+
+Mit `include_metadata=True` wird neben der Antwort auch der vom Orchestrator ausgewählte Tool-Name zurückgegeben.
+
+Bestehende normale Chat-Aufrufe bleiben kompatibel und können weiterhin ohne zusätzliche Parameter verwendet werden.
+
+### Schutz des aktiven Reiseplans
+
+Der Orchestrator arbeitet beim Flight-Check auf einer tiefen Kopie des Trips:
+
+```python
+working_trip = copy.deepcopy(trip)
+```
+
+Dadurch bleibt der aktuell aktive Reiseplan unverändert, bis der Nutzer den Vorschlag ausdrücklich annimmt.
+
+Die vom Orchestrator erzeugte Planänderung wird lediglich als neuer Vorschlag gespeichert. Erst nach einer Annahme über die Webseite oder Telegram wird der vorgeschlagene Plan aktiviert.
+
+### Verhinderung unerwünschter Nebenwirkungen
+
+Der bestehende `replan_day`-Handler aktualisiert bei normalen Chat-Anfragen direkt den Kalender und versendet ein Telegram-Planupdate.
+
+Für den Flight-Check wäre dieses Verhalten zu früh, da zunächst nur ein Proposal entstehen soll.
+
+Daher wurde in `agents/coordinator.py` geprüft, ob der interne Proposal-Modus aktiv ist:
+
+```python
+if trip.get("_proposal_mode"):
+    return None
+```
+
+Im Proposal-Modus werden deshalb folgende Aktionen nicht sofort ausgeführt:
+
+* Synchronisation des Plans mit dem Kalender,
+* Versand eines normalen Planupdates über Telegram.
+
+Die eigentliche Planänderung und die neue Budgetberechnung werden weiterhin auf der Trip-Kopie durchgeführt.
+
+### Erstellung des Orchestrator-Proposals
+
+In `agents/replanning.py` wurde die neue Funktion `create_orchestrated_flight_delay_proposal()` ergänzt.
+
+Sie verpackt den vom Orchestrator geänderten Plan in das bestehende Proposal-Format und speichert unter anderem:
+
+* den ursprünglichen aktiven Plan,
+* den vorgeschlagenen neuen Plan,
+* die betroffenen Reisetage,
+* die erkannten Planänderungen,
+* das Budget vor der Änderung,
+* das Budget nach der Änderung,
+* die Verspätung in Minuten,
+* die aktuellen Flugdaten,
+* die synthetische Orchestrator-Nachricht,
+* die Antwort des Orchestrators,
+* die Quelle des Vorschlags.
+
+Vorschläge, die erfolgreich über den LLM-Orchestrator erzeugt wurden, erhalten:
+
+```python
+"proposal_source": "llm_orchestrator"
+```
+
+### Vergleich zwischen altem und neuem Tagesplan
+
+Für die Proposal-Darstellung wurde eine Vergleichsfunktion ergänzt, die den alten und den vorgeschlagenen ersten Reisetag gegenüberstellt.
+
+Dabei werden folgende Änderungen erkannt:
+
+* Aktivitäten wurden entfernt,
+* Aktivitäten wurden ersetzt,
+* neue Aktivitäten wurden hinzugefügt,
+* Start- oder Endzeiten wurden verändert.
+
+Aus diesen Unterschieden wird die Liste `changes` für das Proposal erzeugt. Diese Änderungen können anschließend in der Webseite und in der Telegram-Nachricht angezeigt werden.
+
+### Legacy-Fallback
+
+Falls der LLM-Orchestrator nicht erreichbar ist, einen Fehler auslöst, keinen neuen Plan erzeugt oder nicht das Tool `replan_day` auswählt, wird weiterhin die bestehende mechanische Verschiebe-Funktion verwendet:
+
+```python
+replanning.create_flight_delay_proposal(...)
+```
+
+Damit erhält der Nutzer auch bei einem LLM-Fehler weiterhin einen funktionierenden Neuplanungsvorschlag.
+
+Fallback-Proposals werden mit folgender Quelle gekennzeichnet:
+
+```python
+"proposal_source": "legacy_shift_fallback"
+```
+
+Der aufgetretene Orchestrator-Fehler wird zusätzlich im Proposal unter `orchestrator_error` gespeichert.
+
+### Telegram-Versand
+
+Die bestehende Versandfunktion wurde nicht verändert:
+
+```python
+send_flight_delay_proposal(...)
+```
+
+Der vom Orchestrator erzeugte Vorschlag wird weiterhin über Telegram mit den vorhandenen Buttons versendet:
+
+* Annehmen
+* Ablehnen
+
+Auch der bestehende Callback-Mechanismus zur Verarbeitung der Buttons bleibt unverändert.
+
+Geändert wurde ausschließlich, wie der Inhalt des Proposals erzeugt wird.
+
+### Vermeidung mehrfacher LLM-Aufrufe
+
+Das Monitoring prüft vor einem neuen Orchestrator-Aufruf:
+
+* ob die Verspätung mindestens 30 Minuten beträgt,
+* ob die Verspätung größer als die zuletzt gemeldete Verspätung ist,
+* ob bereits ein ausstehendes Flight-Delay-Proposal existiert.
+
+Dadurch wird verhindert, dass bei jedem Monitoring-Durchlauf erneut derselbe teure LLM-Aufruf ausgelöst wird.
+
+Der Orchestrator wird nur einmalig aktiviert, wenn eine neue relevante Änderung erkannt wurde.
+
+### Keine zusätzliche Abfrage der Flug-API
+
+Die Flug-API wird weiterhin ausschließlich durch den Monitoring-Prozess abgefragt.
+
+Der Orchestrator erhält die bereits vom Monitoring ermittelten Informationen über die synthetische Nachricht und führt keine eigene erneute Flugstatusabfrage durch.
+
+Dadurch bleibt die Aufgabentrennung klar:
+
+* `agents/monitoring.py` ist für regelmäßige Flugstatusabfragen zuständig.
+* Der Orchestrator ist nur für die inhaltliche Neuplanung zuständig.
+
+So werden unnötige doppelte API-Abfragen und zusätzlicher Ressourcenverbrauch vermieden.
+
+### Unterstützung kontrollierter Mock-Tests
+
+Für kontrollierte Tests wurde die Monitoring-Schnittstelle um den Parameter `use_mock_flights` erweitert.
+
+Beispiel:
+
+```python
+monitor_trip(
+    trip_id,
+    use_mock_weather=True,
+    use_mock_flights=True,
+)
+```
+
+Über die Umgebungsvariable kann eine definierte Verspätung simuliert werden:
+
+```python
+os.environ["MOCK_FLIGHT_DELAY_MINUTES"] = "45"
+```
+
+Damit kann eine Flugverspätung von 45 Minuten getestet werden, ohne auf einen real verspäteten Flug warten zu müssen.
+
+Die vorhandene Mock-Datenquelle in `providers/flights.py` wird dabei direkt verwendet.
+
+### Angepasste Dateien
+
+Folgende Dateien wurden geändert:
+
+* `agents/monitoring.py`
+
+    * Aufruf des LLM-Orchestrators bei relevanten Flugverspätungen
+    * Erzeugung der synthetischen Chat-Nachricht
+    * Übergabe bereits ermittelter Flugdaten
+    * Legacy-Fallback
+    * Vermeidung mehrfacher LLM-Aufrufe
+    * Unterstützung von `use_mock_flights`
+
+* `graph.py`
+
+    * Erweiterung von `run_chat()` um `proposal_mode`
+    * optionale Rückgabe des gewählten Tool-Namens über `include_metadata`
+
+* `agents/coordinator.py`
+
+    * Unterdrückung von Kalender- und Telegram-Nebenwirkungen im Proposal-Modus
+
+* `agents/replanning.py`
+
+    * Erstellung von Orchestrator-basierten Flight-Delay-Proposals
+    * Vergleich von ursprünglichem und vorgeschlagenem Tagesplan
+    * Kennzeichnung der Proposal-Quelle
+    * Kennzeichnung des Legacy-Fallbacks
+
+* `prompts.py`
+
+    * Ergänzung der Orchestrator-Anweisung für Flugverspätungen
+
+* `test_flight_orchestrator.py`
+
+    * neue automatisierte Tests für den gesamten Flight-Orchestrator-Ablauf
+
+### Automatisierte Tests
+
+Es wurden fünf automatisierte Tests ergänzt:
+
+1. Kontrollierte Mock-Verspätung ohne echte Flug-API.
+2. Auswahl des `replan_day`-Pfades durch den Orchestrator.
+3. Erzeugung eines Orchestrator-Proposals bei einer Flugverspätung.
+4. Unveränderter aktiver Plan bis zur Annahme des Proposals.
+5. Nutzung der Legacy-Verschiebe-Funktion bei einem Orchestrator-Fehler.
+6. Verhinderung wiederholter LLM-Aufrufe bei einem bereits ausstehenden Proposal.
+
+Testergebnis:
+
+```text
+Ran 5 tests in 0.026s
+
+OK
+```
+
+### Ergebnis
+
+Der Flight-Check ist nun als Orchestrator-Tool in den bestehenden Planungsprozess integriert.
+
+Relevante Flugverspätungen führen nicht mehr automatisch zu einer pauschalen Zeitverschiebung. Stattdessen wird der bestehende erste Reisetag durch den LLM-Orchestrator inhaltlich neu geplant und dem Nutzer als Proposal zur Annahme oder Ablehnung präsentiert.
+
+Falls die intelligente Neuplanung nicht möglich ist, bleibt die bisherige Verschiebe-Funktion als zuverlässige Rückfallebene erhalten.
+
 ## [2026-07-12] Feature: Modul A – Ortsfilter → agentisches Tool-Calling
  
 **Status:** Mergerd  
