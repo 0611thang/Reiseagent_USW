@@ -94,7 +94,6 @@ def _build_aviationstack_params(request: dict) -> dict:
     flight_number = request.get("flight_number")
     origin_airport = request.get("origin_airport") or request.get("from_airport")
     destination_airport = request.get("destination_airport") or request.get("to_airport")
-    departure_date = request.get("departure_date")
 
     if flight_number:
         params["flight_iata"] = str(flight_number).replace(" ", "").upper()
@@ -104,9 +103,6 @@ def _build_aviationstack_params(request: dict) -> dict:
 
     if destination_airport:
         params["arr_iata"] = destination_airport
-
-    if departure_date:
-        params["flight_date"] = departure_date
 
     return params
 
