@@ -1082,18 +1082,42 @@ def _add_activity_to_day(trip: dict, day: dict, activity: dict):
     })
 
 
-def _refresh_plan_after_change(trip: dict, changed_days: list | None = None) -> dict:
+def _refresh_plan_after_change(
+        trip: dict,
+        changed_days: list | None = None,
+) -> dict | None:
     active_plan = trip["active_plan"]
-    active_plan["budget_summary"] = budget.calculate_budget(active_plan["days"], trip["request"])
+
+    active_plan["budget_summary"] = budget.calculate_budget(
+        active_plan["days"],
+        trip["request"],
+    )
+
     active_plan["updated_at"] = datetime.now().isoformat()
+
     trip["agent_insights"].append({
         "agent_name": "chat_planning_agent",
         "display_label": "Chat Planungs Agent",
         "status": "completed",
         "summary": "Aktiver Plan wurde durch Chat-Befehl angepasst.",
     })
-    calendar_result = sync_full_plan_to_calendar(active_plan, trip.get("id"))
-    send_plan_update(active_plan, calendar_synced=calendar_result.get("updated", False))
+
+    # Bei systemseitigen Flight-Checks wird nur eine Trip-Kopie verändert.
+    # Vor der Annahme des Proposals dürfen weder Kalender noch Telegram
+    # aktualisiert werden.
+    if trip.get("_proposal_mode"):
+        return None
+
+    calendar_result = sync_full_plan_to_calendar(
+        active_plan,
+        trip.get("id"),
+    )
+
+    send_plan_update(
+        active_plan,
+        calendar_synced=calendar_result.get("updated", False),
+    )
+
     return calendar_result
 
 

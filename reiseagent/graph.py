@@ -134,12 +134,56 @@ def _get_graph():
     return _compiled_graph
 
 
-def run_chat(trip: dict, message: str) -> dict:
+def run_chat(
+        trip: dict,
+        message: str,
+        *,
+        proposal_mode: bool = False,
+        include_metadata: bool = False,
+) -> dict:
+    """
+    Führt eine Chat-Nachricht durch denselben Orchestrator-Graphen wie einen
+    normalen Nutzer-Turn.
+
+    proposal_mode ist für systemseitig erzeugte Nachrichten gedacht. In diesem
+    Modus dürfen die Handler den übergebenen Trip verändern, aber keine externen
+    Seiteneffekte wie Kalender-Synchronisation oder Telegram-Planupdates
+    auslösen.
+
+    Der Aufrufer sollte im Proposal-Modus eine Kopie des Trips übergeben.
+
+    Mit include_metadata wird zusätzlich der vom Orchestrator gewählte
+    Tool-Name zurückgegeben. Bestehende Aufrufe ohne diesen Parameter erhalten
+    weiterhin nur das normale Reply-Dictionary.
+    """
     graph = _get_graph()
-    state = graph.invoke({
-        "trip": trip,
-        "message": message,
-        "reply": {},
-        "tool_name": "answer_question",
-    })
+
+    marker = object()
+    previous_mode = trip.get("_proposal_mode", marker)
+
+    if proposal_mode:
+        trip["_proposal_mode"] = True
+
+    try:
+        state = graph.invoke({
+            "trip": trip,
+            "message": message,
+            "reply": {},
+            "tool_name": "answer_question",
+        })
+
+    finally:
+        # Temporäres internes Feld nach dem Graph-Aufruf wieder entfernen.
+        if proposal_mode:
+            if previous_mode is marker:
+                trip.pop("_proposal_mode", None)
+            else:
+                trip["_proposal_mode"] = previous_mode
+
+    if include_metadata:
+        return {
+            "reply": state["reply"],
+            "tool_name": state["tool_name"],
+        }
+
     return state["reply"]

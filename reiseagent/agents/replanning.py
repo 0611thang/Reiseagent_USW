@@ -122,6 +122,246 @@ def get_agent_insight(n_changes: int) -> dict:
         "summary": f"{n_changes} Aktivität(en) durch wettergeeignete Alternativen ersetzt (Vorschlag).",
     }
 
+def _plan_changes_for_day(
+        active_plan: dict,
+        proposed_plan: dict,
+        day_number: int = 1,
+) -> list[dict]:
+    """
+    Vergleicht den aktiven und vorgeschlagenen Tagesplan.
+
+    Daraus werden die Änderungen erzeugt, die später im Proposal und in
+    Telegram angezeigt werden.
+    """
+    old_day = next(
+        (
+            day
+            for day in active_plan.get("days", [])
+            if day.get("day_number") == day_number
+        ),
+        None,
+    )
+
+    new_day = next(
+        (
+            day
+            for day in proposed_plan.get("days", [])
+            if day.get("day_number") == day_number
+        ),
+        None,
+    )
+
+    if not old_day or not new_day:
+        return []
+
+    def index_slots(day: dict) -> dict[str, dict]:
+        indexed = {}
+
+        for index, slot in enumerate(day.get("time_slots", [])):
+            key = str(
+                slot.get("id")
+                or f"index:{index}"
+            )
+            indexed[key] = slot
+
+        return indexed
+
+    old_slots = index_slots(old_day)
+    new_slots = index_slots(new_day)
+
+    changes: list[dict] = []
+
+    # Vorhandene alte Slots untersuchen.
+    for slot_id, old_slot in old_slots.items():
+        new_slot = new_slots.get(slot_id)
+        old_activity = old_slot.get("activity", {})
+
+        # Slot wurde vollständig entfernt.
+        if not new_slot:
+            changes.append({
+                "type": "remove_activity",
+                "day_number": day_number,
+                "activity_id": old_activity.get("id"),
+                "activity_name": old_activity.get("name"),
+                "explanation": (
+                    f"'{old_activity.get('name', 'Aktivität')}' "
+                    f"wurde aus Tag {day_number} entfernt."
+                ),
+                "cost_delta": -float(
+                    old_activity.get("estimated_cost_total", 0) or 0
+                ),
+            })
+            continue
+
+        new_activity = new_slot.get("activity", {})
+
+        old_activity_key = (
+                old_activity.get("id")
+                or old_activity.get("name")
+        )
+
+        new_activity_key = (
+                new_activity.get("id")
+                or new_activity.get("name")
+        )
+
+        # Aktivität im Slot wurde ersetzt.
+        if old_activity_key != new_activity_key:
+            changes.append({
+                "type": "replace_activity",
+                "day_number": day_number,
+                "original_activity_id": old_activity.get("id"),
+                "original_activity_name": old_activity.get("name"),
+                "new_activity_id": new_activity.get("id"),
+                "new_activity_name": new_activity.get("name"),
+                "explanation": (
+                    f"'{old_activity.get('name', 'Aktivität')}' wurde durch "
+                    f"'{new_activity.get('name', 'eine Alternative')}' ersetzt."
+                ),
+                "cost_delta": round(
+                    float(
+                        new_activity.get(
+                            "estimated_cost_total",
+                            0,
+                        ) or 0
+                    )
+                    - float(
+                        old_activity.get(
+                            "estimated_cost_total",
+                            0,
+                        ) or 0
+                    ),
+                    2,
+                    ),
+            })
+
+        old_start = old_slot.get("start_time")
+        old_end = old_slot.get("end_time")
+        new_start = new_slot.get("start_time")
+        new_end = new_slot.get("end_time")
+
+        # Zeit des Slots wurde verändert.
+        if (old_start, old_end) != (new_start, new_end):
+            changes.append({
+                "type": "change_time",
+                "day_number": day_number,
+                "activity_id": new_activity.get("id"),
+                "activity_name": new_activity.get("name"),
+                "explanation": (
+                    f"'{new_activity.get('name', 'Aktivität')}' wurde von "
+                    f"{old_start}-{old_end} auf "
+                    f"{new_start}-{new_end} verschoben."
+                ),
+                "old_start_time": old_start,
+                "old_end_time": old_end,
+                "new_start_time": new_start,
+                "new_end_time": new_end,
+                "cost_delta": 0,
+            })
+
+    # Neu hinzugefügte Slots erkennen.
+    for slot_id, new_slot in new_slots.items():
+        if slot_id in old_slots:
+            continue
+
+        new_activity = new_slot.get("activity", {})
+
+        changes.append({
+            "type": "add_activity",
+            "day_number": day_number,
+            "activity_id": new_activity.get("id"),
+            "activity_name": new_activity.get("name"),
+            "explanation": (
+                f"'{new_activity.get('name', 'Aktivität')}' "
+                f"wurde zu Tag {day_number} hinzugefügt."
+            ),
+            "cost_delta": float(
+                new_activity.get("estimated_cost_total", 0) or 0
+            ),
+        })
+
+    return changes
+
+def create_orchestrated_flight_delay_proposal(
+        trip: dict,
+        proposed_plan: dict,
+        flight_updates: dict,
+        delay_minutes: int,
+        orchestrator_message: str,
+        orchestrator_reply: str = "",
+) -> dict:
+    """
+    Verpackt den vom normalen Chat-Orchestrator geänderten Plan als
+    Flight-Delay-Proposal.
+    """
+    active_plan = trip.get("active_plan")
+
+    if not active_plan:
+        raise ValueError("Kein aktiver Plan vorhanden.")
+
+    if not proposed_plan:
+        raise ValueError(
+            "Der Orchestrator hat keinen vorgeschlagenen Plan geliefert."
+        )
+
+    proposal_plan = copy.deepcopy(proposed_plan)
+
+    changes = _plan_changes_for_day(
+        active_plan,
+        proposal_plan,
+        day_number=1,
+    )
+
+    if not changes:
+        raise ValueError(
+            "Der Orchestrator hat keine Änderung für den "
+            "ersten Reisetag erzeugt."
+        )
+
+    # Der Vorschlag erhält eine eigene Plan-ID und ist noch nicht aktiv.
+    proposal_plan["id"] = str(uuid.uuid4())
+    proposal_plan["status"] = "proposal_pending"
+    proposal_plan["updated_at"] = datetime.now().isoformat()
+
+    budget_before = active_plan.get("budget_summary", {})
+
+    budget_after = calculate_budget(
+        proposal_plan.get("days", []),
+        trip["request"],
+    )
+
+    proposal_plan["budget_summary"] = budget_after
+
+    flight_number = (
+            trip.get("request", {}).get("flight_number")
+            or flight_updates.get("flight_number")
+            or "unbekannter Flug"
+    )
+
+    return {
+        "id": str(uuid.uuid4()),
+        "plan_id": active_plan["id"],
+        "reason": (
+            f"Flugverspätung bei {flight_number}: "
+            f"{delay_minutes} Minuten. "
+            "Der Orchestrator hat die Auswirkungen auf den "
+            "ersten Reisetag geprüft."
+        ),
+        "affected_day_numbers": [1],
+        "changes": changes,
+        "proposed_plan": proposal_plan,
+        "budget_before": budget_before,
+        "budget_after": budget_after,
+        "status": "pending",
+        "created_at": datetime.now().isoformat(),
+        "trigger": "flight_delay",
+        "proposal_source": "llm_orchestrator",
+        "flight_updates": flight_updates,
+        "delay_minutes": delay_minutes,
+        "orchestrator_message": orchestrator_message,
+        "orchestrator_reply": orchestrator_reply,
+    }
+
 def _shift_time(time_str: str, minutes: int) -> str:
     hour, minute = map(int, time_str.split(":"))
     total = hour * 60 + minute + minutes
@@ -215,6 +455,7 @@ def create_flight_delay_proposal(trip: dict, flight_updates: dict, delay_minutes
         "status": "pending",
         "created_at": datetime.now().isoformat(),
         "trigger": "flight_delay",
+        "proposal_source": "legacy_shift_fallback",
         "flight_updates": flight_updates,
         "delay_minutes": delay_minutes,
     }

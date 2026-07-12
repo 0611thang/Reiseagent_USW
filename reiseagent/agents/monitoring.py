@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 from datetime import datetime
 from importlib import import_module
 from typing import Any
 
+import graph
 import store
 from agents import replanning
 from providers.places import get_places
@@ -158,7 +160,7 @@ def _refresh_weather(trip: dict, use_mock_weather: bool = False) -> dict[str, An
     }
 
 
-def _call_flight_provider(request: dict) -> Any:
+def _call_flight_provider(request: dict, use_mock: bool = False) -> Any:
     try:
         flights = import_module("providers.flights")
     except ModuleNotFoundError:
@@ -173,6 +175,9 @@ def _call_flight_provider(request: dict) -> Any:
         func = getattr(flights, function_name, None)
 
         if callable(func):
+            if use_mock and function_name == "get_flight_status_for_trip":
+                return func(request, use_mock=True)
+
             return func(request)
 
     return None
@@ -219,8 +224,82 @@ def _has_pending_flight_delay_proposal(trip: dict) -> bool:
 
     return False
 
+def _build_flight_delay_orchestrator_message(
+        request: dict,
+        flight_updates: dict,
+        delay_minutes: int,
+) -> str:
+    flight_number = (
+            request.get("flight_number")
+            or flight_updates.get("flight_number")
+            or "unbekannter Flug"
+    )
 
-def _refresh_flights(trip: dict) -> dict[str, Any]:
+    scheduled_arrival = flight_updates.get("scheduled_arrival")
+    estimated_arrival = flight_updates.get("estimated_arrival")
+
+    arrival_details = ""
+
+    if scheduled_arrival or estimated_arrival:
+        arrival_details = (
+            f" Geplante Ankunft: {scheduled_arrival or 'unbekannt'}, "
+            f"aktuell erwartete Ankunft: {estimated_arrival or 'unbekannt'}."
+        )
+
+    return (
+        f"Systemmeldung: Flug {flight_number} hat {delay_minutes} Minuten Verspätung."
+        f"{arrival_details} Die Verspätung wirkt sich auf den Ankunftszeitpunkt am "
+        "ersten Reisetag aus. Bitte plane Tag 1 inhaltlich neu und prüfe dabei den "
+        "bestehenden Tagesplan, sinnvolle Uhrzeiten, Öffnungszeiten und mögliche "
+        "Budget-Auswirkungen. Erzeuge eine passende Planänderung für den ersten Reisetag."
+    )
+
+
+def _create_orchestrated_flight_delay_proposal(
+        trip: dict,
+        flight_updates: dict,
+        delay_minutes: int,
+) -> dict:
+    message = _build_flight_delay_orchestrator_message(
+        trip.get("request", {}),
+        flight_updates,
+        delay_minutes,
+    )
+
+    # Der normale Chat-Pfad verändert den übergebenen Trip direkt.
+    # Für einen Vorschlag arbeiten wir deshalb auf einer tiefen Kopie.
+    working_trip = copy.deepcopy(trip)
+
+    result = graph.run_chat(
+        working_trip,
+        message,
+        proposal_mode=True,
+        include_metadata=True,
+    )
+
+    selected_tool = result.get("tool_name")
+
+    if selected_tool != "replan_day":
+        raise RuntimeError(
+            f"Orchestrator hat '{selected_tool}' statt 'replan_day' gewählt."
+        )
+
+    reply = result.get("reply") or {}
+
+    return replanning.create_orchestrated_flight_delay_proposal(
+        trip,
+        working_trip.get("active_plan"),
+        flight_updates,
+        delay_minutes,
+        orchestrator_message=message,
+        orchestrator_reply=reply.get("message", ""),
+    )
+
+
+def _refresh_flights(
+        trip: dict,
+        use_mock_flights: bool = False,
+) -> dict[str, Any]:
     request = trip.get("request", {})
 
     if not request.get("flight_number"):
@@ -229,14 +308,22 @@ def _refresh_flights(trip: dict) -> dict[str, Any]:
             "reason": "Keine Flugnummer im Trip gespeichert.",
         }
 
-    old_notified_delay = trip.get("last_notified_flight_delay_minutes", 0) or 0
+    old_notified_delay = (
+            trip.get("last_notified_flight_delay_minutes", 0) or 0
+    )
 
-    flight_updates = _call_flight_provider(request)
+    flight_updates = _call_flight_provider(
+        request,
+        use_mock=use_mock_flights,
+    )
 
     if flight_updates is None:
         return {
             "updated": False,
-            "reason": "Kein providers.flights-Modul oder keine passende Flight-Funktion gefunden.",
+            "reason": (
+                "Kein providers.flights-Modul oder keine passende "
+                "Flight-Funktion gefunden."
+            ),
         }
 
     delay_minutes = _extract_delay_minutes(flight_updates)
@@ -248,6 +335,8 @@ def _refresh_flights(trip: dict) -> dict[str, Any]:
 
     proposals_created = 0
     telegram_sent = False
+    proposal_source = None
+    fallback_used = False
 
     if (
             delay_minutes >= FLIGHT_DELAY_THRESHOLD_MINUTES
@@ -257,11 +346,28 @@ def _refresh_flights(trip: dict) -> dict[str, Any]:
         try:
             current_trip = store.get_trip(trip["id"])
 
-            proposal = replanning.create_flight_delay_proposal(
-                current_trip,
-                flight_updates,
-                delay_minutes,
-            )
+            try:
+                # Zuerst intelligente Neuplanung über den normalen Chat-Graphen.
+                proposal = _create_orchestrated_flight_delay_proposal(
+                    current_trip,
+                    flight_updates,
+                    delay_minutes,
+                )
+
+            except Exception as orchestrator_exc:
+                # Falls LLM/Graph fehlschlägt, wird die alte Verschiebe-Logik
+                # als technische Rückfallebene verwendet.
+                fallback_used = True
+
+                proposal = replanning.create_flight_delay_proposal(
+                    current_trip,
+                    flight_updates,
+                    delay_minutes,
+                )
+
+                proposal["orchestrator_error"] = str(orchestrator_exc)
+
+            proposal_source = proposal.get("proposal_source")
 
             proposals = current_trip.get("proposals", [])
             proposals.append(proposal)
@@ -269,8 +375,12 @@ def _refresh_flights(trip: dict) -> dict[str, Any]:
             update_data["proposals"] = proposals
             update_data["last_notified_flight_delay_minutes"] = delay_minutes
 
-            updated_trip = store.update_trip(trip["id"], update_data)
+            updated_trip = store.update_trip(
+                trip["id"],
+                update_data,
+            )
 
+            # Bestehende Telegram-Funktion bleibt unverändert.
             telegram_sent = send_flight_delay_proposal(
                 updated_trip,
                 proposal,
@@ -282,16 +392,31 @@ def _refresh_flights(trip: dict) -> dict[str, Any]:
             _append_insight(
                 updated_trip,
                 (
-                    f"Flugverspätung erkannt: {delay_minutes} Minuten. "
-                    "Ein Neuplanungsvorschlag wurde erstellt und per Telegram gesendet."
+                        f"Flugverspätung erkannt: {delay_minutes} Minuten. "
+                        "Ein Neuplanungsvorschlag wurde "
+                        + (
+                            "über den Orchestrator erstellt"
+                            if not fallback_used
+                            else "über die technische Rückfallebene erstellt"
+                        )
+                        + " und per Telegram gesendet."
                 ),
             )
 
         except Exception as exc:
-            store.update_trip(trip["id"], update_data)
+            # Auch wenn die Proposal-Erzeugung insgesamt scheitert, werden die
+            # aktuellen Flugdaten weiterhin gespeichert.
+            store.update_trip(
+                trip["id"],
+                update_data,
+            )
+
             _append_insight(
                 trip,
-                f"Flug-Monitoring konnte keinen Neuplanungsvorschlag erstellen: {exc}",
+                (
+                    "Flug-Monitoring konnte keinen "
+                    f"Neuplanungsvorschlag erstellen: {exc}"
+                ),
                 "warning",
             )
 
@@ -301,11 +426,16 @@ def _refresh_flights(trip: dict) -> dict[str, Any]:
                 "delay_minutes": delay_minutes,
                 "proposals_created": 0,
                 "telegram_sent": False,
+                "proposal_source": proposal_source,
+                "fallback_used": fallback_used,
                 "error": str(exc),
             }
 
     else:
-        store.update_trip(trip["id"], update_data)
+        store.update_trip(
+            trip["id"],
+            update_data,
+        )
 
         _append_insight(
             store.get_trip(trip["id"]),
@@ -318,10 +448,16 @@ def _refresh_flights(trip: dict) -> dict[str, Any]:
         "delay_minutes": delay_minutes,
         "proposals_created": proposals_created,
         "telegram_sent": telegram_sent,
+        "proposal_source": proposal_source,
+        "fallback_used": fallback_used,
     }
 
 
-def monitor_trip(trip_id: str, use_mock_weather: bool = False) -> dict[str, Any]:
+def monitor_trip(
+        trip_id: str,
+        use_mock_weather: bool = False,
+        use_mock_flights: bool = False,
+) -> dict[str, Any]:
     trip = store.get_trip(trip_id)
 
     if not trip:
@@ -333,8 +469,14 @@ def monitor_trip(trip_id: str, use_mock_weather: bool = False) -> dict[str, Any]
     return {
         "trip_id": trip_id,
         "checked_at": _now_iso(),
-        "weather": _refresh_weather(trip, use_mock_weather=use_mock_weather),
-        "flights": _refresh_flights(store.get_trip(trip_id)),
+        "weather": _refresh_weather(
+            trip,
+            use_mock_weather=use_mock_weather,
+        ),
+        "flights": _refresh_flights(
+            store.get_trip(trip_id),
+            use_mock_flights=use_mock_flights,
+        ),
     }
 
 
@@ -375,13 +517,23 @@ def required_interval_seconds(trip: dict) -> int | None:
     return None           # mehr als 24h hin — noch nicht prüfen
 
 
-def monitor_all_active_trips(use_mock_weather: bool = False) -> dict[str, Any]:
+def monitor_all_active_trips(
+        use_mock_weather: bool = False,
+        use_mock_flights: bool = False,
+) -> dict[str, Any]:
     results = []
 
     for trip in store.list_trips():
-        if trip.get("active_plan") and trip["active_plan"].get("status") == "active":
+        if (
+                trip.get("active_plan")
+                and trip["active_plan"].get("status") == "active"
+        ):
             results.append(
-                monitor_trip(trip["id"], use_mock_weather=use_mock_weather)
+                monitor_trip(
+                    trip["id"],
+                    use_mock_weather=use_mock_weather,
+                    use_mock_flights=use_mock_flights,
+                )
             )
 
     return {
