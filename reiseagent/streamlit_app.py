@@ -870,20 +870,19 @@ def render_flight_panel(trip: dict):
     api_unavailable = source in ["mock_after_api_error", "api_unavailable", "api_error"]
 
     if api_unavailable:
-        st.error(
-            "Echte Flugroute und Uhrzeiten konnten nicht geladen werden."
+        st.markdown(
+            f"""
+            <div class="card">
+                <div class="card-title">Flug {_esc(number)}</div>
+                <div style="font-size:13px;color:#374151;line-height:1.7;">
+                    Echte Flugroute und Uhrzeiten konnten nicht geladen werden.<br>
+                    Der Reiseplan verwendet deshalb keine simulierten Flugzeiten.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-
-    with st.expander("Technische Flug-API-Details"):
-        st.json({
-            "source": details.get("source"),
-            "error_reason": details.get("error_reason"),
-            "message": details.get("message"),
-            "error": details.get("error"),
-            "flight_number": details.get("flight_number"),
-        })
-
-    return
+        return
 
     origin = _flight_airport_label(details.get("origin_airport"))
     destination = _flight_airport_label(details.get("destination_airport"))
